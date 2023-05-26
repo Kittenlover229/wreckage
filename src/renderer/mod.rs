@@ -7,10 +7,12 @@ use vulkano::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, ClearColorImageInfo,
         CommandBufferUsage, CopyImageToBufferInfo,
     },
-    device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags},
+    device::{
+        physical::PhysicalDevice, Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags,
+    },
     format::ClearColorValue,
     image::StorageImage,
-    instance::Instance,
+    instance::{Instance, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
     sync::{self, GpuFuture},
     VulkanLibrary,
@@ -53,14 +55,25 @@ pub struct Renderer {
     pub buffer_allocator: StandardMemoryAllocator,
     pub command_allocator: StandardCommandBufferAllocator,
 
+    // State Management
     pub instance: Arc<Instance>,
     pub device: Arc<Device>,
+    pub physical: Arc<PhysicalDevice>,
     pub fallback_queue: Arc<Queue>,
 }
 
 impl Renderer {
     pub fn new(library: Arc<VulkanLibrary>) -> anyhow::Result<Self> {
-        let instance = Instance::new(library, Default::default())?;
+        let required_extensions = vulkano_win::required_extensions(&library);
+
+        let instance = Instance::new(
+            library,
+            InstanceCreateInfo {
+                enabled_extensions: required_extensions,
+                ..Default::default()
+            },
+        )?;
+
         let physical_device = instance.enumerate_physical_devices()?.next().unwrap();
         let queue_family_index = physical_device
             .queue_family_properties()
@@ -75,7 +88,7 @@ impl Renderer {
             as u32;
 
         let (device, mut queues) = Device::new(
-            physical_device,
+            physical_device.clone(),
             DeviceCreateInfo {
                 // here we pass the desired queue family to use by index
                 queue_create_infos: vec![QueueCreateInfo {
@@ -97,6 +110,7 @@ impl Renderer {
             instance,
             device,
             fallback_queue: queue,
+            physical: physical_device,
             buffer_allocator,
             command_allocator,
         })
