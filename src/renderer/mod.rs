@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 
 use nalgebra_glm::{Quat, Vec3};
 use vulkano::{
@@ -28,15 +28,20 @@ pub struct RenderableObject {
     pub rotation: Quat,
 }
 
-#[derive(Debug, Clone)]
-pub struct Camera {
-    pub idx: u32,
+#[derive(Clone, Debug, Default)]
+pub struct CameraOptions {
     pub pos: Vec3,
     pub rotation: Quat,
     pub fov: f32,
+}
 
+#[derive(Debug, Clone)]
+pub struct Camera {
+    pub idx: u32,
     pub width: u32,
     pub height: u32,
+
+    pub options: RefCell<CameraOptions>,
 
     pub out_buffer: Arc<StorageImage>,
 }
@@ -99,9 +104,7 @@ impl Renderer {
 
     pub fn add_camera(
         &mut self,
-        at: Vec3,
-        rot: Quat,
-        fov: f32,
+        options: CameraOptions,
         width: u32,
         height: u32,
     ) -> anyhow::Result<Arc<Camera>> {
@@ -116,16 +119,13 @@ impl Renderer {
             Some(self.fallback_queue.queue_family_index()),
         )?;
 
-        let camera = Camera {
-            pos: at,
-            rotation: rot,
-            fov,
+        let camera = Arc::new(Camera {
+            options: RefCell::new(options),
             out_buffer,
             idx: self.cameras.len() as u32,
             width,
             height,
-        };
-        let camera = Arc::new(camera);
+        });
 
         self.cameras.push(camera.clone());
 
@@ -207,7 +207,9 @@ impl Renderer {
         use image::{ImageBuffer, Rgba};
 
         let buffer_content = buf.read().unwrap();
-        let image = ImageBuffer::<Rgba<u8>, _>::from_raw(camera.width, camera.height, &buffer_content[..]).unwrap();
+        let image =
+            ImageBuffer::<Rgba<u8>, _>::from_raw(camera.width, camera.height, &buffer_content[..])
+                .unwrap();
         image.save(name)?;
 
         Ok(())
