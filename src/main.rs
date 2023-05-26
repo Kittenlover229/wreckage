@@ -16,7 +16,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let mut renderer = Renderer::new(library)?;
     let event_loop = EventLoop::new();
-    let window = Arc::new(WindowBuilder::new().build(&event_loop)?);
+    let window = Arc::new(WindowBuilder::new().with_resizable(false).build(&event_loop)?);
     let surface = create_surface_from_winit(window, renderer.instance.clone())?;
 
     let camera = renderer.add_camera(
@@ -28,7 +28,7 @@ pub fn main() -> anyhow::Result<()> {
         600,
     )?;
 
-    let renderer = Arc::new(renderer);
+    renderer.attach_swapchain(camera.idx, surface);
     renderer.draw_all()?;
 
     event_loop.run(move |event, _, control_flow| match event {
@@ -38,7 +38,9 @@ pub fn main() -> anyhow::Result<()> {
         } => {
             *control_flow = ControlFlow::Exit;
         }
-        Event::MainEventsCleared => {}
+        Event::MainEventsCleared => {
+            renderer.present_all();
+        }
         _ => (),
     });
 }

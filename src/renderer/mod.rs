@@ -4,17 +4,22 @@ use nalgebra_glm::{Quat, Vec3};
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage},
     command_buffer::{
-        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, ClearColorImageInfo,
-        CommandBufferUsage, CopyImageToBufferInfo,
+        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
+        ClearColorImageInfo, CommandBufferUsage, CopyImageToBufferInfo,
     },
     device::{
-        physical::PhysicalDevice, Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags,
+        physical::{PhysicalDevice, PhysicalDeviceType},
+        Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
     },
     format::ClearColorValue,
-    image::StorageImage,
+    image::{ImageAccess, ImageUsage, StorageImage, SwapchainImage},
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
-    sync::{self, GpuFuture},
+    swapchain::{
+        self, AcquireError, PresentInfo, Surface, Swapchain, SwapchainCreateInfo,
+        SwapchainPresentInfo,
+    },
+    sync::{self, FlushError, GpuFuture},
     VulkanLibrary,
 };
 
@@ -37,7 +42,6 @@ pub struct CameraOptions {
     pub fov: f32,
 }
 
-#[derive(Debug, Clone)]
 pub struct Camera {
     pub idx: u32,
     pub width: u32,
@@ -45,11 +49,21 @@ pub struct Camera {
 
     pub options: RefCell<CameraOptions>,
 
-    pub out_buffer: Arc<StorageImage>,
+    pub out_buffer: Arc<dyn ImageAccess>,
+}
+
+pub struct SwapchainPresenter {
+    pub camera_idx: u32,
+    pub dirty: bool,
+    pub idx: u32,
+
+    pub swapchain: Arc<Swapchain>,
+    pub images: Vec<Arc<SwapchainImage>>,
 }
 
 pub struct Renderer {
     pub cameras: Vec<Arc<Camera>>,
+    swapchains: Vec<SwapchainPresenter>,
 
     // Allocators
     pub buffer_allocator: StandardMemoryAllocator,
@@ -74,7 +88,17 @@ impl Renderer {
             },
         )?;
 
-        let physical_device = instance.enumerate_physical_devices()?.next().unwrap();
+        let device_extensions = DeviceExtensions {
+            khr_swapchain: true,
+            ..DeviceExtensions::empty()
+        };
+
+        let physical_device = instance
+            .enumerate_physical_devices()?
+            .filter(|p| p.supported_extensions().contains(&device_extensions))
+            .next()
+            .unwrap();
+
         let queue_family_index = physical_device
             .queue_family_properties()
             .iter()
@@ -95,6 +119,7 @@ impl Renderer {
                     queue_family_index,
                     ..Default::default()
                 }],
+                enabled_extensions: device_extensions,
                 ..Default::default()
             },
         )?;
@@ -107,6 +132,7 @@ impl Renderer {
 
         Ok(Self {
             cameras: vec![],
+            swapchains: vec![],
             instance,
             device,
             fallback_queue: queue,
@@ -114,6 +140,48 @@ impl Renderer {
             buffer_allocator,
             command_allocator,
         })
+    }
+
+    pub fn attach_swapchain(&mut self, camera_idx: u32, surface: Arc<Surface>) {
+        let camera = self.cameras[camera_idx as usize].clone();
+
+        let caps = self
+            .physical
+            .surface_capabilities(&surface, Default::default())
+            .expect("failed to get surface capabilities");
+
+        let dimensions = [camera.width, camera.height];
+        let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
+        let image_format = Some(
+            self.physical
+                .surface_formats(&surface, Default::default())
+                .unwrap()[0]
+                .0,
+        );
+
+        let (swapchain, images) = Swapchain::new(
+            self.device.clone(),
+            surface.clone(),
+            SwapchainCreateInfo {
+                min_image_count: caps.min_image_count + 1,
+                image_format,
+                image_extent: dimensions.into(),
+                image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+                composite_alpha,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let swapchain_preseneter = SwapchainPresenter {
+            dirty: false,
+            idx: self.swapchains.len() as u32,
+            swapchain,
+            images,
+            camera_idx,
+        };
+
+        self.swapchains.push(swapchain_preseneter);
     }
 
     pub fn add_camera(
@@ -178,6 +246,69 @@ impl Renderer {
             .for_each(|fence| fence.wait(None).unwrap());
 
         Ok(())
+    }
+
+    pub fn present_all(&mut self) {
+        for swapchain_presenter in &mut self.swapchains {
+            let SwapchainPresenter {
+                swapchain,
+                dirty,
+                images,
+                ..
+            } = swapchain_presenter;
+
+            let (image_i, suboptimal, acquire_future) =
+                match swapchain::acquire_next_image(swapchain.clone(), None) {
+                    Ok(r) => r,
+                    Err(AcquireError::OutOfDate) => {
+                        *dirty = true;
+                        return;
+                    }
+                    Err(e) => panic!("failed to acquire next image: {e}"),
+                };
+
+            if suboptimal {
+                *dirty = true
+            }
+
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &self.command_allocator,
+                self.fallback_queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+
+            let camera = self.cameras[swapchain_presenter.camera_idx as usize].clone();
+            builder
+                .blit_image(BlitImageInfo::images(
+                    camera.out_buffer.clone(),
+                    images[image_i as usize].clone(),
+                ))
+                .unwrap();
+            let command_buffer = builder.build().unwrap();
+
+            let execution = sync::now(self.device.clone())
+                .join(acquire_future)
+                .then_execute(self.fallback_queue.clone(), command_buffer)
+                .unwrap()
+                .then_swapchain_present(
+                    self.fallback_queue.clone(),
+                    SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
+                )
+                .then_signal_fence_and_flush();
+
+            match execution {
+                Ok(future) => {
+                    future.wait(None).unwrap(); // wait for the GPU to finish
+                }
+                Err(FlushError::OutOfDate) => {
+                    *dirty = true;
+                }
+                Err(e) => {
+                    println!("Failed to flush future: {e}");
+                }
+            }
+        }
     }
 
     pub fn save_png(&self, name: &str, camera_idx: u32) -> anyhow::Result<()> {
