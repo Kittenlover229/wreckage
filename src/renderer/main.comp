@@ -1,0 +1,16 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba8) uniform writeonly image2D img;
+
+layout(set = 0, binding = 1) buffer RenderData {
+    mat4 view_matrix;
+    float aspect_ratio;
+    float fov;
+} render_conf;
+
+void main() {
+    vec2 norm_coordinates = (gl_GlobalInvocationID.xy + vec2(0.5)) / vec2(imageSize(img));
+    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(norm_coordinates, 0, 0));
+}

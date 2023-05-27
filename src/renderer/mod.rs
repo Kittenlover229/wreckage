@@ -1,27 +1,35 @@
 use std::{cell::RefCell, sync::Arc};
 
-use nalgebra_glm::{Quat, Vec3};
+use nalgebra_glm::{Mat4, Quat, Vec3};
 use vulkano::{
     buffer::{Buffer, BufferCreateInfo, BufferUsage},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
         ClearColorImageInfo, CommandBufferUsage, CopyImageToBufferInfo,
     },
+    descriptor_set::{
+        allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
+    },
     device::{
-        physical::{PhysicalDevice, PhysicalDeviceType},
-        Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Queue,
+        QueueCreateInfo, QueueFlags,
     },
     format::ClearColorValue,
-    image::{ImageAccess, ImageUsage, StorageImage, SwapchainImage},
+    image::{
+        view::{ImageView, ImageViewCreateInfo},
+        ImageAccess, ImageUsage, StorageImage, SwapchainImage,
+    },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
+    pipeline::{ComputePipeline, Pipeline},
     swapchain::{
-        self, AcquireError, PresentInfo, Surface, Swapchain, SwapchainCreateInfo,
-        SwapchainPresentInfo,
+        self, AcquireError, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
     },
     sync::{self, FlushError, GpuFuture},
     VulkanLibrary,
 };
+
+mod shaders;
 
 #[derive(Debug, Clone)]
 pub enum RenderableObjectKind {
@@ -36,19 +44,30 @@ pub struct RenderableObject {
 }
 
 #[derive(Clone, Debug, Default)]
+#[repr(C)]
 pub struct CameraOptions {
     pub pos: Vec3,
     pub rotation: Quat,
     pub fov: f32,
 }
 
+impl CameraOptions {
+    pub fn mat4(&self) -> Mat4 {
+        let pos = Mat4::new_translation(&self.pos);
+        let rot = nalgebra_glm::quat_to_mat4(&self.rotation);
+        rot * pos
+    }
+}
+
 pub struct Camera {
+    pub downscale_factor: u32,
     pub idx: u32,
     pub width: u32,
     pub height: u32,
 
     pub options: RefCell<CameraOptions>,
 
+    pub descriptors: Arc<PersistentDescriptorSet>,
     pub out_buffer: Arc<dyn ImageAccess>,
 }
 
@@ -61,6 +80,14 @@ pub struct SwapchainPresenter {
     pub images: Vec<Arc<SwapchainImage>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct RenderData {
+    pub view: Mat4,
+    pub aspect_ratio: f32,
+    pub fov: f32,
+}
+
 pub struct Renderer {
     pub cameras: Vec<Arc<Camera>>,
     swapchains: Vec<SwapchainPresenter>,
@@ -68,12 +95,16 @@ pub struct Renderer {
     // Allocators
     pub buffer_allocator: StandardMemoryAllocator,
     pub command_allocator: StandardCommandBufferAllocator,
+    pub descriptor_allocator: StandardDescriptorSetAllocator,
 
     // State Management
     pub instance: Arc<Instance>,
     pub device: Arc<Device>,
     pub physical: Arc<PhysicalDevice>,
     pub fallback_queue: Arc<Queue>,
+
+    // Rendering
+    pub compute_pipeline: Arc<ComputePipeline>,
 }
 
 impl Renderer {
@@ -130,6 +161,17 @@ impl Renderer {
         let command_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
+        let shader = shaders::main::load(device.clone())?;
+        let pipeline = ComputePipeline::new(
+            device.clone(),
+            shader.entry_point("main").unwrap(),
+            &(),
+            None,
+            |_| {},
+        )?;
+
+        let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
+
         Ok(Self {
             cameras: vec![],
             swapchains: vec![],
@@ -139,13 +181,13 @@ impl Renderer {
             physical: physical_device,
             buffer_allocator,
             command_allocator,
+            descriptor_allocator,
+            compute_pipeline: pipeline,
         })
     }
 
     #[must_use]
     pub fn attach_swapchain(&mut self, camera_idx: u32, surface: Arc<Surface>) -> u32 {
-        let camera = self.cameras[camera_idx as usize].clone();
-
         let caps = self
             .physical
             .surface_capabilities(&surface, Default::default())
@@ -208,26 +250,45 @@ impl Renderer {
     pub fn add_camera(
         &mut self,
         options: CameraOptions,
+        downscale_factor: u32,
         width: u32,
         height: u32,
     ) -> anyhow::Result<Arc<Camera>> {
         let out_buffer = StorageImage::new(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
-                width,
-                height,
+                width: width / downscale_factor,
+                height: height / downscale_factor,
                 array_layers: 1,
             },
             vulkano::format::Format::R8G8B8A8_UNORM,
             Some(self.fallback_queue.queue_family_index()),
         )?;
 
+        let pipeline_layout = self.compute_pipeline.layout();
+        let descriptor_layouts = pipeline_layout.set_layouts();
+
+        let descriptor_set = PersistentDescriptorSet::new(
+            &self.descriptor_allocator,
+            descriptor_layouts[0].clone(),
+            [WriteDescriptorSet::image_view(
+                0,
+                // possibly redundant
+                ImageView::new(
+                    out_buffer.clone(),
+                    ImageViewCreateInfo::from_image(&out_buffer),
+                )?,
+            )],
+        )?;
+
         let camera = Arc::new(Camera {
+            width,
+            height,
             options: RefCell::new(options),
             out_buffer,
             idx: self.cameras.len() as u32,
-            width,
-            height,
+            descriptors: descriptor_set,
+            downscale_factor,
         });
 
         self.cameras.push(camera.clone());
@@ -246,10 +307,19 @@ impl Renderer {
             )
             .unwrap();
 
-            builder.clear_color_image(ClearColorImageInfo {
-                clear_value: ClearColorValue::Float([0.0, 0.0, 1.0, 1.0]),
-                ..ClearColorImageInfo::image(camera.out_buffer.clone())
-            })?;
+            builder
+                .clear_color_image(ClearColorImageInfo {
+                    clear_value: ClearColorValue::Float([0.0, 0.0, 1.0, 1.0]),
+                    ..ClearColorImageInfo::image(camera.out_buffer.clone())
+                })?
+                .bind_pipeline_compute(self.compute_pipeline.clone())
+                .bind_descriptor_sets(
+                    vulkano::pipeline::PipelineBindPoint::Compute,
+                    self.compute_pipeline.layout().clone(),
+                    0,
+                    camera.descriptors.clone(),
+                )
+                .dispatch([camera.width, camera.height, 1])?;
 
             let command_buffer = builder.build()?;
 

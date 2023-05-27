@@ -26,6 +26,7 @@ pub fn main() -> anyhow::Result<()> {
             fov: 120f32,
             ..Default::default()
         },
+        32,
         size.width,
         size.height,
     )?;
