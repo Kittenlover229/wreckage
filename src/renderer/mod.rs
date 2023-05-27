@@ -142,7 +142,8 @@ impl Renderer {
         })
     }
 
-    pub fn attach_swapchain(&mut self, camera_idx: u32, surface: Arc<Surface>) {
+    #[must_use]
+    pub fn attach_swapchain(&mut self, camera_idx: u32, surface: Arc<Surface>) -> u32 {
         let camera = self.cameras[camera_idx as usize].clone();
 
         let caps = self
@@ -150,7 +151,6 @@ impl Renderer {
             .surface_capabilities(&surface, Default::default())
             .expect("failed to get surface capabilities");
 
-        let dimensions = [camera.width, camera.height];
         let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
         let image_format = Some(
             self.physical
@@ -165,7 +165,6 @@ impl Renderer {
             SwapchainCreateInfo {
                 min_image_count: caps.min_image_count + 1,
                 image_format,
-                image_extent: dimensions.into(),
                 image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                 composite_alpha,
                 ..Default::default()
@@ -181,7 +180,29 @@ impl Renderer {
             camera_idx,
         };
 
+        let idx = swapchain_preseneter.idx;
         self.swapchains.push(swapchain_preseneter);
+        idx
+    }
+
+    pub fn refresh_swapchain(&mut self, idx: u32, dimensions: [u32; 2]) -> anyhow::Result<()> {
+        let s = &mut self.swapchains[idx as usize];
+        let (swapchain, images) = match s.swapchain.recreate(SwapchainCreateInfo {
+            image_extent: dimensions.into(),
+            ..s.swapchain.create_info()
+        }) {
+            Ok(k) => k,
+            Err(swapchain::SwapchainCreationError::ImageExtentNotSupported { .. }) => return Ok(()),
+            Err(e) => {
+                panic!("{e}");
+            }
+        };
+
+        s.dirty = false;
+        s.swapchain = swapchain;
+        s.images = images;
+
+        Ok(())
     }
 
     pub fn add_camera(
@@ -256,6 +277,10 @@ impl Renderer {
                 images,
                 ..
             } = swapchain_presenter;
+
+            if *dirty {
+                continue;
+            }
 
             let (image_i, suboptimal, acquire_future) =
                 match swapchain::acquire_next_image(swapchain.clone(), None) {
