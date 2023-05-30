@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{borrow::BorrowMut, cell::RefCell, sync::Arc};
 
 use nalgebra_glm::{Mat4, Quat, Vec3};
 use vulkano::{
@@ -89,7 +89,7 @@ pub struct RenderData {
 }
 
 pub struct Renderer {
-    pub cameras: Vec<Arc<Camera>>,
+    pub cameras: Vec<Arc<RefCell<Camera>>>,
     swapchains: Vec<SwapchainPresenter>,
 
     // Allocators
@@ -240,6 +240,37 @@ impl Renderer {
             }
         };
 
+        let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
+        camera.out_buffer = StorageImage::new(
+            &self.buffer_allocator,
+            vulkano::image::ImageDimensions::Dim2d {
+                width: dimensions[0] / camera.downscale_factor,
+                height: dimensions[1] / camera.downscale_factor,
+                array_layers: 1,
+            },
+            vulkano::format::Format::R8G8B8A8_UNORM,
+            Some(self.fallback_queue.queue_family_index()),
+        )?;
+
+        let pipeline_layout = self.compute_pipeline.layout();
+        let descriptor_layouts = pipeline_layout.set_layouts();
+
+        camera.descriptors = PersistentDescriptorSet::new(
+            &self.descriptor_allocator,
+            descriptor_layouts[0].clone(),
+            [WriteDescriptorSet::image_view(
+                0,
+                // possibly redundant
+                ImageView::new(
+                    camera.out_buffer.clone(),
+                    ImageViewCreateInfo::from_image(&camera.out_buffer),
+                )?,
+            )],
+        )?;
+
+        camera.width = dimensions[0] / camera.downscale_factor;
+        camera.height = dimensions[1] / camera.downscale_factor;
+
         s.dirty = false;
         s.swapchain = swapchain;
         s.images = images;
@@ -253,7 +284,7 @@ impl Renderer {
         downscale_factor: u32,
         width: u32,
         height: u32,
-    ) -> anyhow::Result<Arc<Camera>> {
+    ) -> anyhow::Result<Arc<RefCell<Camera>>> {
         let out_buffer = StorageImage::new(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
@@ -281,7 +312,7 @@ impl Renderer {
             )],
         )?;
 
-        let camera = Arc::new(Camera {
+        let camera = Arc::new(RefCell::new(Camera {
             width,
             height,
             options: RefCell::new(options),
@@ -289,7 +320,7 @@ impl Renderer {
             idx: self.cameras.len() as u32,
             descriptors: descriptor_set,
             downscale_factor,
-        });
+        }));
 
         self.cameras.push(camera.clone());
 
@@ -300,6 +331,7 @@ impl Renderer {
         let mut futures = vec![];
 
         for camera in &self.cameras {
+            let camera = camera.borrow();
             let mut builder = AutoCommandBufferBuilder::primary(
                 &self.command_allocator,
                 self.fallback_queue.queue_family_index(),
@@ -308,10 +340,6 @@ impl Renderer {
             .unwrap();
 
             builder
-                .clear_color_image(ClearColorImageInfo {
-                    clear_value: ClearColorValue::Float([0.0, 0.0, 1.0, 1.0]),
-                    ..ClearColorImageInfo::image(camera.out_buffer.clone())
-                })?
                 .bind_pipeline_compute(self.compute_pipeline.clone())
                 .bind_descriptor_sets(
                     vulkano::pipeline::PipelineBindPoint::Compute,
@@ -373,7 +401,7 @@ impl Renderer {
             )
             .unwrap();
 
-            let camera = self.cameras[swapchain_presenter.camera_idx as usize].clone();
+            let camera = self.cameras[swapchain_presenter.camera_idx as usize].borrow();
             builder
                 .blit_image(BlitImageInfo::images(
                     camera.out_buffer.clone(),
@@ -407,7 +435,7 @@ impl Renderer {
     }
 
     pub fn save_png(&self, name: &str, camera_idx: u32) -> anyhow::Result<()> {
-        let camera = self.cameras[camera_idx as usize].as_ref();
+        let camera = self.cameras[camera_idx as usize].borrow();
 
         let buf = Buffer::from_iter(
             &self.buffer_allocator,

@@ -31,9 +31,8 @@ pub fn main() -> anyhow::Result<()> {
         size.height,
     )?;
 
-    let swapchain_idx = renderer.attach_swapchain(camera.idx, surface);
-    renderer.draw_all()?;
-
+    let swapchain_idx = renderer.attach_swapchain(camera.borrow().idx, surface);
+    
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
             event: WindowEvent::CloseRequested,
@@ -49,6 +48,10 @@ pub fn main() -> anyhow::Result<()> {
             renderer
                 .refresh_swapchain(swapchain_idx, [size.width, size.height])
                 .unwrap();
+        }
+
+        Event::RedrawEventsCleared => {
+            renderer.draw_all().unwrap();
         }
 
         Event::MainEventsCleared => {
