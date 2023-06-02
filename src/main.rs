@@ -1,13 +1,12 @@
 mod renderer;
 use std::sync::Arc;
-use log::debug;
 
-use nalgebra_glm::{quat_angle_axis, quat_look_at_lh, Vec3, quat_euler_angles};
+use nalgebra_glm::{quat_angle_axis, quat_euler_angles, quat_look_at_lh, Vec3};
 pub use renderer::*;
 use vulkano::VulkanLibrary;
 use vulkano_win::create_surface_from_winit;
 use winit::{
-    event::{DeviceEvent, Event, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
@@ -81,6 +80,26 @@ pub fn main() -> anyhow::Result<()> {
             renderer
                 .refresh_swapchain(swapchain_idx, [size.width, size.height])
                 .unwrap();
+        }
+
+        Event::WindowEvent {
+            event:
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            virtual_keycode: Some(VirtualKeyCode::K),
+                            state: ElementState::Pressed,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap();
+            let filename = format!("{}-screenshot.png", now.as_secs()).to_string();
+            renderer.save_png(&filename, camera.borrow().idx).unwrap();
         }
 
         Event::MainEventsCleared => {

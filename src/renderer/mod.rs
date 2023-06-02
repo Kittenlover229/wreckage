@@ -487,7 +487,9 @@ impl Renderer {
                 usage: MemoryUsage::Download,
                 ..Default::default()
             },
-            (0..camera.width * camera.height * 4).map(|_| 0u8),
+            (0..camera.width * camera.height * 4
+                / (camera.downscale_factor * camera.downscale_factor))
+                .map(|_| 0u8),
         )?;
 
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -512,7 +514,7 @@ impl Renderer {
 
         let buffer_content = buf.read()?;
         let image =
-            ImageBuffer::<Rgba<u8>, _>::from_raw(camera.width, camera.height, &buffer_content[..])
+            ImageBuffer::<Rgba<u8>, _>::from_raw(camera.width / camera.downscale_factor, camera.height / camera.downscale_factor, &buffer_content[..])
                 .unwrap();
         image.save(name)?;
 

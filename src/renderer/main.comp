@@ -43,5 +43,5 @@ void main() {
     if (hit_sphere(vec3(0, 0, 1), 0.1, ray_direction))
         colour = vec3(1, 0, 0);
 
-    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(colour, 0));
+    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(colour, 1));
 }
