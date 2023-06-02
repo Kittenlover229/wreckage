@@ -1,8 +1,8 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
-use nalgebra_glm::{Mat4, Quat, Vec3};
+use nalgebra_glm::{pi, Mat4, Quat, Vec3};
 use vulkano::{
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
         CommandBufferUsage, CopyImageToBufferInfo,
@@ -71,6 +71,18 @@ pub struct Camera {
 
     pub descriptors: Arc<PersistentDescriptorSet>,
     pub out_buffer: Arc<dyn ImageAccess>,
+    pub data_buffer: Subbuffer<CameraDataBuffer>,
+}
+
+impl Camera {
+    pub fn refresh_data_buffer(&mut self) -> anyhow::Result<()> {
+        let mut buf = self.data_buffer.write()?;
+        let options = self.options.borrow();
+        buf.fov = options.fov;
+        buf.aspect_ratio = self.width as f32 / self.height as f32;
+        buf.view_matrix = options.view_matrix().data.0;
+        Ok(())
+    }
 }
 
 pub struct SwapchainPresenter {
@@ -82,17 +94,9 @@ pub struct SwapchainPresenter {
     pub images: Vec<Arc<SwapchainImage>>,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct RenderData {
-    pub view: Mat4,
-    pub aspect_ratio: f32,
-    pub fov: f32,
-}
-
 #[derive(BufferContents, Debug, Default)]
 #[repr(C)]
-struct CameraBufferContents {
+pub struct CameraDataBuffer {
     pub view_matrix: [[f32; 4]; 4],
     pub aspect_ratio: f32,
     pub fov: f32,
@@ -266,6 +270,9 @@ impl Renderer {
         let pipeline_layout = self.compute_pipeline.layout();
         let descriptor_layouts = pipeline_layout.set_layouts();
 
+        camera.width = dimensions[0] / camera.downscale_factor;
+        camera.height = dimensions[1] / camera.downscale_factor;
+
         camera.descriptors = PersistentDescriptorSet::new(
             &self.descriptor_allocator,
             descriptor_layouts[0].clone(),
@@ -279,26 +286,11 @@ impl Renderer {
                         ImageViewCreateInfo::from_image(&camera.out_buffer),
                     )?,
                 ),
-                WriteDescriptorSet::buffer(
-                    1,
-                    Buffer::from_data(
-                        &self.buffer_allocator,
-                        BufferCreateInfo {
-                            usage: BufferUsage::STORAGE_BUFFER,
-                            ..Default::default()
-                        },
-                        AllocationCreateInfo {
-                            usage: MemoryUsage::Upload,
-                            ..Default::default()
-                        },
-                        CameraBufferContents::default(),
-                    )?,
-                ),
+                WriteDescriptorSet::buffer(1, camera.data_buffer.clone()),
             ],
         )?;
 
-        camera.width = dimensions[0] / camera.downscale_factor;
-        camera.height = dimensions[1] / camera.downscale_factor;
+        camera.refresh_data_buffer()?;
 
         s.dirty = false;
         s.swapchain = swapchain;
@@ -325,6 +317,23 @@ impl Renderer {
             Some(self.fallback_queue.queue_family_index()),
         )?;
 
+        let camera_data_buffer = Buffer::from_data(
+            &self.buffer_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            CameraDataBuffer {
+                view_matrix: options.borrow().view_matrix().data.0,
+                aspect_ratio: width as f32 / height as f32,
+                fov: options.borrow().fov,
+            },
+        )?;
+
         let pipeline_layout = self.compute_pipeline.layout();
         let descriptor_layouts = pipeline_layout.set_layouts();
 
@@ -338,21 +347,7 @@ impl Renderer {
                     // possibly redundant
                     ImageView::new_default(out_buffer.clone())?,
                 ),
-                WriteDescriptorSet::buffer(
-                    1,
-                    Buffer::from_data(
-                        &self.buffer_allocator,
-                        BufferCreateInfo {
-                            usage: BufferUsage::STORAGE_BUFFER,
-                            ..Default::default()
-                        },
-                        AllocationCreateInfo {
-                            usage: MemoryUsage::Upload,
-                            ..Default::default()
-                        },
-                        CameraBufferContents::default(),
-                    )?,
-                ),
+                WriteDescriptorSet::buffer(1, camera_data_buffer.clone()),
             ],
         )?;
 
@@ -364,6 +359,7 @@ impl Renderer {
             idx: self.cameras.len() as u32,
             descriptors: descriptor_set,
             downscale_factor,
+            data_buffer: camera_data_buffer,
         }));
 
         self.cameras.push(camera.clone());
@@ -375,7 +371,9 @@ impl Renderer {
         let mut futures = vec![];
 
         for camera in &self.cameras {
+            let camera: &RefCell<Camera> = camera.as_ref();
             let camera = camera.borrow();
+
             let mut builder = AutoCommandBufferBuilder::primary(
                 &self.command_allocator,
                 self.fallback_queue.queue_family_index(),
@@ -396,10 +394,8 @@ impl Renderer {
             let command_buffer = builder.build()?;
 
             let future = sync::now(self.device.clone())
-                .then_execute(self.fallback_queue.clone(), command_buffer)
-                .unwrap()
-                .then_signal_fence_and_flush()
-                .unwrap();
+                .then_execute(self.fallback_queue.clone(), command_buffer)?
+                .then_signal_fence_and_flush()?;
 
             futures.push(future);
         }
@@ -411,7 +407,7 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn present_all(&mut self) {
+    pub fn present_all(&mut self) -> anyhow::Result<()> {
         for swapchain_presenter in &mut self.swapchains {
             let SwapchainPresenter {
                 swapchain,
@@ -429,7 +425,7 @@ impl Renderer {
                     Ok(r) => r,
                     Err(AcquireError::OutOfDate) => {
                         *dirty = true;
-                        return;
+                        continue;
                     }
                     Err(e) => panic!("failed to acquire next image: {e}"),
                 };
@@ -442,22 +438,21 @@ impl Renderer {
                 &self.command_allocator,
                 self.fallback_queue.queue_family_index(),
                 CommandBufferUsage::OneTimeSubmit,
-            )
-            .unwrap();
+            )?;
 
-            let camera = self.cameras[swapchain_presenter.camera_idx as usize].borrow();
-            builder
-                .blit_image(BlitImageInfo::images(
-                    camera.out_buffer.clone(),
-                    images[image_i as usize].clone(),
-                ))
-                .unwrap();
+            let camera: &RefCell<Camera> =
+                self.cameras[swapchain_presenter.camera_idx as usize].borrow();
+            let camera = camera.borrow();
+
+            builder.blit_image(BlitImageInfo::images(
+                camera.out_buffer.clone(),
+                images[image_i as usize].clone(),
+            ))?;
             let command_buffer = builder.build().unwrap();
 
             let execution = sync::now(self.device.clone())
                 .join(acquire_future)
-                .then_execute(self.fallback_queue.clone(), command_buffer)
-                .unwrap()
+                .then_execute(self.fallback_queue.clone(), command_buffer)?
                 .then_swapchain_present(
                     self.fallback_queue.clone(),
                     SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
@@ -476,10 +471,12 @@ impl Renderer {
                 }
             }
         }
+        Ok(())
     }
 
     pub fn save_png(&self, name: &str, camera_idx: u32) -> anyhow::Result<()> {
-        let camera = self.cameras[camera_idx as usize].borrow();
+        let camera: &RefCell<Camera> = self.cameras[camera_idx as usize].borrow();
+        let camera = camera.borrow();
 
         let buf = Buffer::from_iter(
             &self.buffer_allocator,
