@@ -1,11 +1,11 @@
-use std::{borrow::BorrowMut, cell::RefCell, sync::Arc};
+use std::{cell::RefCell, sync::Arc};
 
 use nalgebra_glm::{Mat4, Quat, Vec3};
 use vulkano::{
-    buffer::{Buffer, BufferCreateInfo, BufferUsage},
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
-        ClearColorImageInfo, CommandBufferUsage, CopyImageToBufferInfo,
+        CommandBufferUsage, CopyImageToBufferInfo,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -14,7 +14,6 @@ use vulkano::{
         physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Queue,
         QueueCreateInfo, QueueFlags,
     },
-    format::ClearColorValue,
     image::{
         view::{ImageView, ImageViewCreateInfo},
         ImageAccess, ImageUsage, StorageImage, SwapchainImage,
@@ -48,11 +47,14 @@ pub struct RenderableObject {
 pub struct CameraOptions {
     pub pos: Vec3,
     pub rotation: Quat,
+    // Vertical field of view
     pub fov: f32,
+    pub near_plane: f32,
+    pub far_plane: f32,
 }
 
 impl CameraOptions {
-    pub fn mat4(&self) -> Mat4 {
+    pub fn view_matrix(&self) -> Mat4 {
         let pos = Mat4::new_translation(&self.pos);
         let rot = nalgebra_glm::quat_to_mat4(&self.rotation);
         rot * pos
@@ -84,6 +86,14 @@ pub struct SwapchainPresenter {
 #[repr(C)]
 pub struct RenderData {
     pub view: Mat4,
+    pub aspect_ratio: f32,
+    pub fov: f32,
+}
+
+#[derive(BufferContents, Debug, Default)]
+#[repr(C)]
+struct CameraBufferContents {
+    pub view_matrix: [[f32; 4]; 4],
     pub aspect_ratio: f32,
     pub fov: f32,
 }
@@ -241,6 +251,7 @@ impl Renderer {
         };
 
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
+
         camera.out_buffer = StorageImage::new(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
@@ -258,14 +269,32 @@ impl Renderer {
         camera.descriptors = PersistentDescriptorSet::new(
             &self.descriptor_allocator,
             descriptor_layouts[0].clone(),
-            [WriteDescriptorSet::image_view(
-                0,
-                // possibly redundant
-                ImageView::new(
-                    camera.out_buffer.clone(),
-                    ImageViewCreateInfo::from_image(&camera.out_buffer),
-                )?,
-            )],
+            // TODO: dry this
+            [
+                WriteDescriptorSet::image_view(
+                    0,
+                    // possibly redundant
+                    ImageView::new(
+                        camera.out_buffer.clone(),
+                        ImageViewCreateInfo::from_image(&camera.out_buffer),
+                    )?,
+                ),
+                WriteDescriptorSet::buffer(
+                    1,
+                    Buffer::from_data(
+                        &self.buffer_allocator,
+                        BufferCreateInfo {
+                            usage: BufferUsage::STORAGE_BUFFER,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo {
+                            usage: MemoryUsage::Upload,
+                            ..Default::default()
+                        },
+                        CameraBufferContents::default(),
+                    )?,
+                ),
+            ],
         )?;
 
         camera.width = dimensions[0] / camera.downscale_factor;
@@ -302,14 +331,29 @@ impl Renderer {
         let descriptor_set = PersistentDescriptorSet::new(
             &self.descriptor_allocator,
             descriptor_layouts[0].clone(),
-            [WriteDescriptorSet::image_view(
-                0,
-                // possibly redundant
-                ImageView::new(
-                    out_buffer.clone(),
-                    ImageViewCreateInfo::from_image(&out_buffer),
-                )?,
-            )],
+            // TODO: dry this
+            [
+                WriteDescriptorSet::image_view(
+                    0,
+                    // possibly redundant
+                    ImageView::new_default(out_buffer.clone())?,
+                ),
+                WriteDescriptorSet::buffer(
+                    1,
+                    Buffer::from_data(
+                        &self.buffer_allocator,
+                        BufferCreateInfo {
+                            usage: BufferUsage::STORAGE_BUFFER,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo {
+                            usage: MemoryUsage::Upload,
+                            ..Default::default()
+                        },
+                        CameraBufferContents::default(),
+                    )?,
+                ),
+            ],
         )?;
 
         let camera = Arc::new(RefCell::new(Camera {

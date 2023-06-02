@@ -24,6 +24,8 @@ pub fn main() -> anyhow::Result<()> {
     let camera = renderer.add_camera(
         CameraOptions {
             fov: 120f32,
+            near_plane: 0.1f32,
+            far_plane: 4f32,
             ..Default::default()
         },
         32,
@@ -50,11 +52,8 @@ pub fn main() -> anyhow::Result<()> {
                 .unwrap();
         }
 
-        Event::RedrawEventsCleared => {
+        Event::RedrawRequested(_) => {
             renderer.draw_all().unwrap();
-        }
-
-        Event::MainEventsCleared => {
             renderer.present_all();
         }
         _ => (),

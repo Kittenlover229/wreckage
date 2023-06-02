@@ -12,5 +12,7 @@ layout(set = 0, binding = 1) buffer RenderData {
 
 void main() {
     vec2 norm_coordinates = (gl_GlobalInvocationID.xy + vec2(0.5)) / vec2(imageSize(img));
+    float d = 1 / tan(render_conf.fov / 2);
+
     imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(norm_coordinates, 0, 0));
 }
