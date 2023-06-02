@@ -1,6 +1,6 @@
 use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
-use nalgebra_glm::{pi, Mat4, Quat, Vec3};
+use nalgebra_glm::{Mat4, Quat, Vec3};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
@@ -44,7 +44,7 @@ pub struct RenderableObject {
 
 #[derive(Clone, Debug, Default)]
 #[repr(C)]
-pub struct CameraOptions {
+pub struct DynamicCameraData {
     pub pos: Vec3,
     pub rotation: Quat,
     // Vertical field of view
@@ -53,11 +53,9 @@ pub struct CameraOptions {
     pub far_plane: f32,
 }
 
-impl CameraOptions {
+impl DynamicCameraData {
     pub fn view_matrix(&self) -> Mat4 {
-        let pos = Mat4::new_translation(&self.pos);
-        let rot = nalgebra_glm::quat_to_mat4(&self.rotation);
-        rot * pos
+        nalgebra_glm::quat_to_mat4(&self.rotation)
     }
 }
 
@@ -67,7 +65,7 @@ pub struct Camera {
     pub width: u32,
     pub height: u32,
 
-    pub options: RefCell<CameraOptions>,
+    pub dynamic_data: RefCell<DynamicCameraData>,
 
     pub descriptors: Arc<PersistentDescriptorSet>,
     pub out_buffer: Arc<dyn ImageAccess>,
@@ -77,10 +75,10 @@ pub struct Camera {
 impl Camera {
     pub fn refresh_data_buffer(&mut self) -> anyhow::Result<()> {
         let mut buf = self.data_buffer.write()?;
-        let options = self.options.borrow();
-        buf.fov = options.fov;
+        let dynamic_data = self.dynamic_data.borrow();
+        buf.fov = dynamic_data.fov;
         buf.aspect_ratio = self.width as f32 / self.height as f32;
-        buf.view_matrix = options.view_matrix().data.0;
+        buf.view_matrix = dynamic_data.view_matrix().data.0;
         Ok(())
     }
 }
@@ -98,6 +96,7 @@ pub struct SwapchainPresenter {
 #[repr(C)]
 pub struct CameraDataBuffer {
     pub view_matrix: [[f32; 4]; 4],
+    pub origin_offset: [[f32; 3]; 1],
     pub aspect_ratio: f32,
     pub fov: f32,
 }
@@ -299,7 +298,7 @@ impl Renderer {
 
     pub fn add_camera(
         &mut self,
-        options: CameraOptions,
+        dynamic_data: DynamicCameraData,
         downscale_factor: u32,
         width: u32,
         height: u32,
@@ -326,9 +325,10 @@ impl Renderer {
                 ..Default::default()
             },
             CameraDataBuffer {
-                view_matrix: options.borrow().view_matrix().data.0,
+                view_matrix: dynamic_data.borrow().view_matrix().data.0,
+                origin_offset: dynamic_data.borrow().pos.data.0,
                 aspect_ratio: width as f32 / height as f32,
-                fov: options.borrow().fov,
+                fov: dynamic_data.borrow().fov,
             },
         )?;
 
@@ -352,7 +352,7 @@ impl Renderer {
         let camera = Arc::new(RefCell::new(Camera {
             width,
             height,
-            options: RefCell::new(options),
+            dynamic_data: RefCell::new(dynamic_data),
             out_buffer,
             idx: self.cameras.len() as u32,
             descriptors: descriptor_set,

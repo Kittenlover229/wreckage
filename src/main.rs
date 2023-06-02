@@ -1,6 +1,7 @@
 mod renderer;
 use std::sync::Arc;
 
+use log::debug;
 use nalgebra_glm::{quat_angle_axis, quat_euler_angles, quat_look_at_lh, Vec3};
 pub use renderer::*;
 use vulkano::VulkanLibrary;
@@ -29,14 +30,11 @@ pub fn main() -> anyhow::Result<()> {
     let size = window.inner_size();
 
     let camera = renderer.add_camera(
-        CameraOptions {
+        DynamicCameraData {
             fov: 60f32,
             near_plane: 0.1f32,
             far_plane: 4f32,
             pos: Vec3::zeros(),
-            // The order of arguments is reversed because by default the camera
-            // is looking upwards, by swapping the UP and FORWARD directions we
-            // actually make it look forward
             rotation: quat_look_at_lh(&Vec3::new(0., 0., 1.), &Vec3::new(0., 1., 0.)),
             ..Default::default()
         },
@@ -65,9 +63,10 @@ pub fn main() -> anyhow::Result<()> {
         } => {
             let (x, y) = delta;
             let mut cam = camera.borrow_mut();
-            let mut opts = cam.options.borrow_mut();
+            let mut opts = cam.dynamic_data.borrow_mut();
 
             opts.rotation *= quat_angle_axis(x as f32 * mouse_speed, &Vec3::new(0., 1., 0.));
+            debug!("{}", quat_euler_angles(&opts.rotation));
             drop(opts);
 
             cam.refresh_data_buffer().unwrap();
