@@ -1,8 +1,8 @@
 mod renderer;
-
 use std::sync::Arc;
+use log::debug;
 
-use nalgebra_glm::{quat_angle_axis, quat_look_at_lh, quat_rotation, rotate_normalized_axis, Vec3, quat_euler_angles};
+use nalgebra_glm::{quat_angle_axis, quat_look_at_lh, Vec3, quat_euler_angles};
 pub use renderer::*;
 use vulkano::VulkanLibrary;
 use vulkano_win::create_surface_from_winit;
@@ -13,6 +13,10 @@ use winit::{
 };
 
 pub fn main() -> anyhow::Result<()> {
+    drop(dotenv::dotenv());
+    drop(color_eyre::install());
+    drop(pretty_env_logger::init());
+
     let library = VulkanLibrary::new()?;
 
     let mut renderer = Renderer::new(library)?;
@@ -65,9 +69,6 @@ pub fn main() -> anyhow::Result<()> {
             let mut opts = cam.options.borrow_mut();
 
             opts.rotation *= quat_angle_axis(x as f32 * mouse_speed, &Vec3::new(0., 1., 0.));
-            //opts.rotation *= quat_angle_axis(-y as f32 * mouse_speed, &Vec3::new(1., 0., 0.));
-            println!("{}", quat_euler_angles(&opts.rotation));
-
             drop(opts);
 
             cam.refresh_data_buffer().unwrap();
