@@ -249,9 +249,7 @@ impl Renderer {
         }) {
             Ok(k) => k,
             Err(swapchain::SwapchainCreationError::ImageExtentNotSupported { .. }) => return Ok(()),
-            Err(e) => {
-                panic!("{e}");
-            }
+            Err(e) => return Err(e.into()),
         };
 
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
@@ -426,7 +424,7 @@ impl Renderer {
                         *dirty = true;
                         continue;
                     }
-                    Err(e) => panic!("failed to acquire next image: {e}"),
+                    Err(e) => return Err(e.into()),
                 };
 
             if suboptimal {
@@ -513,9 +511,12 @@ impl Renderer {
         use image::{ImageBuffer, Rgba};
 
         let buffer_content = buf.read()?;
-        let image =
-            ImageBuffer::<Rgba<u8>, _>::from_raw(camera.width / camera.downscale_factor, camera.height / camera.downscale_factor, &buffer_content[..])
-                .unwrap();
+        let image = ImageBuffer::<Rgba<u8>, _>::from_raw(
+            camera.width / camera.downscale_factor,
+            camera.height / camera.downscale_factor,
+            &buffer_content[..],
+        )
+        .unwrap();
         image.save(name)?;
 
         Ok(())
