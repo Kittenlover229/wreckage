@@ -378,8 +378,7 @@ impl Renderer {
                 &self.command_allocator,
                 self.fallback_queue.queue_family_index(),
                 CommandBufferUsage::OneTimeSubmit,
-            )
-            .unwrap();
+            )?;
 
             builder
                 .bind_pipeline_compute(self.compute_pipeline.clone())
@@ -400,9 +399,9 @@ impl Renderer {
             futures.push(future);
         }
 
-        futures
-            .into_iter()
-            .for_each(|fence| fence.wait(None).unwrap());
+        for future in futures {
+            future.wait(None)?;
+        }
 
         Ok(())
     }
@@ -448,7 +447,7 @@ impl Renderer {
                 camera.out_buffer.clone(),
                 images[image_i as usize].clone(),
             ))?;
-            let command_buffer = builder.build().unwrap();
+            let command_buffer = builder.build()?;
 
             let execution = sync::now(self.device.clone())
                 .join(acquire_future)
@@ -461,7 +460,7 @@ impl Renderer {
 
             match execution {
                 Ok(future) => {
-                    future.wait(None).unwrap(); // wait for the GPU to finish
+                    future.wait(None)?; // wait for the GPU to finish
                 }
                 Err(FlushError::OutOfDate) => {
                     *dirty = true;
@@ -495,8 +494,7 @@ impl Renderer {
             &self.command_allocator,
             self.fallback_queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
+        )?;
 
         builder.copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
             camera.out_buffer.clone(),
@@ -506,16 +504,13 @@ impl Renderer {
         let command_buffer = builder.build()?;
 
         sync::now(self.device.clone())
-            .then_execute(self.fallback_queue.clone(), command_buffer)
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
+            .then_execute(self.fallback_queue.clone(), command_buffer)?
+            .then_signal_fence_and_flush()?
+            .wait(None)?;
 
         use image::{ImageBuffer, Rgba};
 
-        let buffer_content = buf.read().unwrap();
+        let buffer_content = buf.read()?;
         let image =
             ImageBuffer::<Rgba<u8>, _>::from_raw(camera.width, camera.height, &buffer_content[..])
                 .unwrap();
