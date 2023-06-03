@@ -107,7 +107,7 @@ pub struct PushConstants {
 
 pub struct Renderer {
     pub cameras: Vec<Arc<RefCell<Camera>>>,
-    swapchains: Vec<SwapchainPresenter>,
+    pub swapchains: Vec<SwapchainPresenter>,
 
     // Allocators
     pub buffer_allocator: StandardMemoryAllocator,
@@ -319,6 +319,8 @@ impl Renderer {
             Some(self.fallback_queue.queue_family_index()),
         )?;
 
+        let dynamic_data = dynamic_data.borrow();
+
         let camera_data_buffer = Buffer::from_data(
             &self.buffer_allocator,
             BufferCreateInfo {
@@ -330,12 +332,12 @@ impl Renderer {
                 ..Default::default()
             },
             CameraDataBuffer {
-                view_matrix: dynamic_data.borrow().view_matrix().data.0,
-                origin_offset: dynamic_data.borrow().pos.data.0,
+                view_matrix: dynamic_data.view_matrix().data.0,
+                origin_offset: dynamic_data.pos.data.0,
                 aspect_ratio: width as f32 / height as f32,
-                near_plane: dynamic_data.borrow().near_plane,
-                far_plane: dynamic_data.borrow().far_plane,
-                fov: dynamic_data.borrow().fov,
+                near_plane: dynamic_data.near_plane,
+                far_plane: dynamic_data.far_plane,
+                fov: dynamic_data.fov,
             },
         )?;
 
@@ -359,7 +361,7 @@ impl Renderer {
         let camera = Arc::new(RefCell::new(Camera {
             width,
             height,
-            dynamic_data: RefCell::new(dynamic_data),
+            dynamic_data: RefCell::new(dynamic_data.to_owned()),
             out_buffer,
             idx: self.cameras.len() as u32,
             descriptors: descriptor_set,
@@ -444,7 +446,7 @@ impl Renderer {
             };
 
         if suboptimal {
-            *dirty = true
+            *dirty = true;
         }
 
         let mut builder = AutoCommandBufferBuilder::primary(

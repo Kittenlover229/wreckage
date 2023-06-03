@@ -107,7 +107,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let camera = renderer.add_camera(
         DynamicCameraData {
-            fov: 60f32,
+            fov: 90f32,
             near_plane: 0.1f32,
             far_plane: 4f32,
             pos: Vec3::zeros(),
@@ -218,7 +218,7 @@ pub fn main() -> anyhow::Result<()> {
                 renderer.save_png(&filename, camera.borrow().idx).unwrap();
             }
 
-            Event::MainEventsCleared => {
+            Event::RedrawRequested(_) => {
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
                     egui_winit_vulkano::egui::Window::new("Benchmark")
@@ -246,6 +246,10 @@ pub fn main() -> anyhow::Result<()> {
                     fps_timer = 0.;
                 }
                 fps_counter += 1;
+            }
+
+            Event::MainEventsCleared => {
+                window.request_redraw();
             }
             _ => (),
         }
