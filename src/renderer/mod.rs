@@ -22,25 +22,15 @@ use vulkano::{
     memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
     pipeline::{ComputePipeline, Pipeline},
     swapchain::{
-        self, AcquireError, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
+        self, AcquireError, PresentMode, Surface, Swapchain, SwapchainCreateInfo,
+        SwapchainPresentInfo,
     },
     sync::{self, FlushError, GpuFuture},
     VulkanLibrary,
 };
 
+mod object;
 mod shaders;
-
-#[derive(Debug, Clone)]
-pub enum RenderableObjectKind {
-    Sphere { radius: f32 },
-}
-
-#[derive(Debug, Clone)]
-pub struct RenderableObject {
-    pub kind: RenderableObjectKind,
-    pub pos: Vec3,
-    pub rotation: Quat,
-}
 
 #[derive(Clone, Debug, Default)]
 #[repr(C)]
@@ -51,6 +41,7 @@ pub struct DynamicCameraData {
     pub fov: f32,
     pub near_plane: f32,
     pub far_plane: f32,
+    pub samples: u32,
 }
 
 impl DynamicCameraData {
@@ -82,6 +73,10 @@ impl Camera {
         buf.near_plane = self.dynamic_data.borrow().near_plane;
         buf.far_plane = self.dynamic_data.borrow().far_plane;
         Ok(())
+    }
+
+    pub fn pixel_area(&self) -> u32 {
+        self.width * self.height / (self.downscale_factor * self.downscale_factor)
     }
 }
 
@@ -226,6 +221,7 @@ impl Renderer {
                 image_format,
                 image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                 composite_alpha,
+                present_mode: PresentMode::Immediate,
                 ..Default::default()
             },
         )
@@ -256,13 +252,14 @@ impl Renderer {
         };
 
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
+        let samples = camera.dynamic_data.borrow().samples.to_owned();
 
         camera.out_buffer = StorageImage::new(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
                 width: dimensions[0] / camera.downscale_factor,
                 height: dimensions[1] / camera.downscale_factor,
-                array_layers: 1,
+                array_layers: samples,
             },
             vulkano::format::Format::R8G8B8A8_UNORM,
             Some(self.fallback_queue.queue_family_index()),
@@ -281,11 +278,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::image_view(
                     0,
-                    // possibly redundant
-                    ImageView::new(
-                        camera.out_buffer.clone(),
-                        ImageViewCreateInfo::from_image(&camera.out_buffer),
-                    )?,
+                    ImageView::new_default(camera.out_buffer.clone())?,
                 ),
                 WriteDescriptorSet::buffer(1, camera.data_buffer.clone()),
             ],
@@ -312,7 +305,7 @@ impl Renderer {
             vulkano::image::ImageDimensions::Dim2d {
                 width: width / downscale_factor,
                 height: height / downscale_factor,
-                array_layers: 1,
+                array_layers: dynamic_data.samples,
             },
             vulkano::format::Format::R8G8B8A8_UNORM,
             Some(self.fallback_queue.queue_family_index()),
@@ -392,7 +385,11 @@ impl Renderer {
                     0,
                     camera.descriptors.clone(),
                 )
-                .dispatch([camera.width, camera.height, 1])?;
+                .dispatch([
+                    camera.width,
+                    camera.height,
+                    camera.dynamic_data.borrow().samples,
+                ])?;
 
             let command_buffer = builder.build()?;
 
@@ -491,9 +488,7 @@ impl Renderer {
                 usage: MemoryUsage::Download,
                 ..Default::default()
             },
-            (0..camera.width * camera.height * 4
-                / (camera.downscale_factor * camera.downscale_factor))
-                .map(|_| 0u8),
+            (0..camera.pixel_area() * 4 * camera.dynamic_data.borrow().samples).map(|_| 0u8),
         )?;
 
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -518,11 +513,13 @@ impl Renderer {
 
         let buffer_content = buf.read()?;
 
-        // Ignore the alpha channel since it's used for depth
         let buf: Vec<u8> = buffer_content
             .into_iter()
             .enumerate()
-            .map(|(i, b)| if (i + 1) % 4 == 0 { std::u8::MAX } else { *b }).collect();
+            // Ignore the alpha channel since it's used for depth
+            .map(|(i, b)| if (i + 1) % 4 == 0 { std::u8::MAX } else { *b })
+            .take(4 * camera.pixel_area() as usize)
+            .collect();
 
         let image = ImageBuffer::<Rgba<u8>, _>::from_raw(
             camera.width / camera.downscale_factor,

@@ -36,9 +36,10 @@ pub fn main() -> anyhow::Result<()> {
             far_plane: 4f32,
             pos: Vec3::zeros(),
             rotation: quat_look_at_lh(&Vec3::new(0., 0., 1.), &Vec3::new(0., 1., 0.)),
+            samples: 4,
             ..Default::default()
         },
-        1,
+        2,
         size.width,
         size.height,
     )?;
@@ -48,6 +49,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let mut dt = 0.;
     let mut last_frame = std::time::Instant::now();
+    let mut fps_timer = 0.;
+    let mut fps_counter = 0;
 
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
@@ -66,7 +69,6 @@ pub fn main() -> anyhow::Result<()> {
             let mut opts = cam.dynamic_data.borrow_mut();
 
             opts.rotation *= quat_angle_axis(x as f32 * mouse_speed, &Vec3::new(0., 1., 0.));
-            debug!("{}", quat_euler_angles(&opts.rotation));
             drop(opts);
 
             cam.refresh_data_buffer().unwrap();
@@ -105,9 +107,17 @@ pub fn main() -> anyhow::Result<()> {
             let now = std::time::Instant::now();
             dt = (now - last_frame).as_secs_f32();
             last_frame = now;
+            fps_timer += dt;
+            
+            if fps_timer > 1.0 {
+                debug!("FPS: {}", fps_counter);
+                fps_counter = 0;
+                fps_timer = 0.;
+            }
 
             renderer.draw_all().unwrap();
             renderer.present_all().unwrap();
+            fps_counter += 1;
         }
         _ => (),
     });
