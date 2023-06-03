@@ -2,7 +2,7 @@ mod renderer;
 use std::sync::Arc;
 
 use log::debug;
-use nalgebra_glm::{quat_angle_axis, quat_euler_angles, quat_look_at_lh, Vec3};
+use nalgebra_glm::{quat_angle_axis, quat_look_at_lh, Vec3, pi};
 pub use renderer::*;
 use vulkano::VulkanLibrary;
 use vulkano_win::create_surface_from_winit;
@@ -51,6 +51,8 @@ pub fn main() -> anyhow::Result<()> {
     let mut last_frame = std::time::Instant::now();
     let mut fps_timer = 0.;
     let mut fps_counter = 0;
+    let mut x_rot_accum = 0f32;
+    let mut y_rot_accum = 0f32;
 
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
@@ -65,10 +67,24 @@ pub fn main() -> anyhow::Result<()> {
             ..
         } => {
             let (x, y) = delta;
+            let x = x as f32;
+            let y = y as f32;
+
             let mut cam = camera.borrow_mut();
             let mut opts = cam.dynamic_data.borrow_mut();
 
-            opts.rotation *= quat_angle_axis(x as f32 * mouse_speed, &Vec3::new(0., 1., 0.));
+            x_rot_accum += x * mouse_speed;
+            y_rot_accum += y * mouse_speed;
+            let half_pi = pi::<f32>() / 2.;
+
+            if y_rot_accum > half_pi {
+                y_rot_accum = half_pi;
+            } else if y_rot_accum < -half_pi {
+                y_rot_accum = -half_pi;
+            } 
+
+            opts.rotation = quat_angle_axis(y_rot_accum, &Vec3::new(1., 0., 0.))
+                * quat_angle_axis(x_rot_accum, &Vec3::new(0., 1., 0.));
             drop(opts);
 
             cam.refresh_data_buffer().unwrap();
