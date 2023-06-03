@@ -1,8 +1,8 @@
 mod renderer;
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use egui_winit_vulkano::{
-    egui::{epaint::Shadow, FontDefinitions, RawInput, Visuals},
+    egui::{epaint::Shadow, Visuals},
     Gui, GuiConfig,
 };
 use log::debug;
@@ -15,6 +15,54 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+
+pub struct Benchmark {
+    capacity: usize,
+    data: VecDeque<f64>,
+}
+
+use egui_winit_vulkano::egui::plot::*;
+use egui_winit_vulkano::egui::*;
+
+impl Benchmark {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            // TODO: use fps cap as capacity
+            capacity,
+            data: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    pub fn draw(&self, ui: &mut Ui) {
+        let iter = self
+            .data
+            .iter()
+            .enumerate()
+            .map(|(i, v)| [i as f64, *v * 1000.0]);
+        let curve = Line::new(PlotPoints::from_iter(iter)).color(Color32::BLUE);
+        let ok = HLine::new(1000.0 / 30.0).color(Color32::GREEN);
+        let bad = HLine::new(1000.0 / 60.0).color(Color32::RED);
+
+        ui.label("Frametime (Draw + Present)");
+        Plot::new("plot")
+            .view_aspect(2.0)
+            .include_y(0)
+            .show(ui, |plot_ui| {
+                plot_ui.line(curve);
+                plot_ui.hline(ok);
+                plot_ui.hline(bad)
+            });
+        ui.label("Green line is frametime for 30 FPS");
+        ui.label("Red line is frametime for 60 FPS");
+    }
+
+    pub fn push(&mut self, v: f64) {
+        if self.data.len() >= self.capacity {
+            self.data.pop_front();
+        }
+        self.data.push_back(v);
+    }
+}
 
 pub fn main() -> anyhow::Result<()> {
     drop(dotenv::dotenv());
@@ -45,6 +93,8 @@ pub fn main() -> anyhow::Result<()> {
         },
     );
 
+    let mut egui_bench = Benchmark::new(250);
+
     let egui_visuals = Visuals {
         window_shadow: Shadow::NONE,
         ..Default::default()
@@ -60,10 +110,10 @@ pub fn main() -> anyhow::Result<()> {
             far_plane: 4f32,
             pos: Vec3::zeros(),
             rotation: quat_look_at_lh(&Vec3::new(0., 0., 1.), &Vec3::new(0., 1., 0.)),
-            samples: 4,
+            samples: 2,
             ..Default::default()
         },
-        4,
+        8,
         size.width,
         size.height,
     )?;
@@ -77,6 +127,7 @@ pub fn main() -> anyhow::Result<()> {
     let mut fps_counter = 0;
     let mut x_rot_accum = 0f32;
     let mut y_rot_accum = 0f32;
+    let mut freeze = false;
 
     event_loop.run(move |event, _, control_flow| {
         match &event {
@@ -100,6 +151,10 @@ pub fn main() -> anyhow::Result<()> {
                 event: DeviceEvent::MouseMotion { delta },
                 ..
             } => {
+                if freeze {
+                    return;
+                }
+
                 let (x, y) = delta;
                 let x = x as f32;
                 let y = y as f32;
@@ -138,6 +193,22 @@ pub fn main() -> anyhow::Result<()> {
                     WindowEvent::KeyboardInput {
                         input:
                             KeyboardInput {
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                state: ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => {
+                freeze = !freeze;
+            }
+
+            Event::WindowEvent {
+                event:
+                    WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
                                 virtual_keycode: Some(VirtualKeyCode::K),
                                 state: ElementState::Pressed,
                                 ..
@@ -154,25 +225,32 @@ pub fn main() -> anyhow::Result<()> {
             }
 
             Event::MainEventsCleared => {
+                gui.immediate_ui(|gui| {
+                    let ctx = gui.context();
+                    egui_winit_vulkano::egui::Window::new("Benchmark")
+                        .default_height(600.0)
+                        .show(&ctx, |ui| {
+                            egui_bench.draw(ui);
+                        });
+                });
+
                 let now = std::time::Instant::now();
                 dt = (now - last_frame).as_secs_f32();
                 last_frame = now;
-                fps_timer += dt;
 
+                let draw_future = renderer.draw_all().unwrap();
+                renderer.present(0, draw_future, &mut gui).unwrap();
+
+                if !freeze {
+                    egui_bench.push(last_frame.elapsed().as_secs_f64());
+                }
+
+                fps_timer += dt;
                 if fps_timer > 1.0 {
                     debug!("FPS: {}", fps_counter);
                     fps_counter = 0;
                     fps_timer = 0.;
                 }
-
-                gui.immediate_ui(|gui| {
-                    let ctx = gui.context();
-                    egui_winit_vulkano::egui::Window::new("Hello, world!").show(&ctx, |_| ());
-                    // Fill egui UI layout here
-                });
-
-                let draw_future = renderer.draw_all().unwrap();
-                renderer.present(0, draw_future, &mut gui).unwrap();
                 fps_counter += 1;
             }
             _ => (),
