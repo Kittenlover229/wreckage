@@ -75,7 +75,7 @@ impl Camera {
     }
 
     pub fn pixel_area(&self) -> u32 {
-        self.width * self.height / (self.downscale_factor * self.downscale_factor)
+        self.width * self.height
     }
 }
 
@@ -261,12 +261,14 @@ impl Renderer {
 
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
         let samples = camera.dynamic_data.borrow().samples.to_owned();
-
+        
+        camera.width = dimensions[0];
+        camera.height = dimensions[1];
         camera.out_buffer = StorageImage::new(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
-                width: dimensions[0] / camera.downscale_factor,
-                height: dimensions[1] / camera.downscale_factor,
+                width: camera.width / camera.downscale_factor,
+                height: camera.height / camera.downscale_factor,
                 array_layers: samples,
             },
             Renderer::camera_format(),
@@ -276,8 +278,6 @@ impl Renderer {
         let pipeline_layout = self.compute_pipeline.layout();
         let descriptor_layouts = pipeline_layout.set_layouts();
 
-        camera.width = dimensions[0] / camera.downscale_factor;
-        camera.height = dimensions[1] / camera.downscale_factor;
 
         camera.descriptors = PersistentDescriptorSet::new(
             &self.descriptor_allocator,
@@ -405,8 +405,8 @@ impl Renderer {
                     camera.descriptors.clone(),
                 )
                 .dispatch([
-                    camera.width,
-                    camera.height,
+                    camera.width / camera.downscale_factor,
+                    camera.height / camera.downscale_factor,
                     camera.dynamic_data.borrow().samples,
                 ])?;
         }

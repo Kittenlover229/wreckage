@@ -117,7 +117,7 @@ void main() {
     vec3 ll_corner = render_conf.origin - vec3(width, -height, 0) / 2 + vec3(0, 0, focal_length);
 
     vec2 AA_fuzz = 2 * vec2(stable_random_01(), stable_random_01()) - 1;
-    vec3 global_ray_direction = ll_corner + vec3((uv + 0.0005 * AA_fuzz) * vec2(width, -height), 0);
+    vec3 global_ray_direction = ll_corner + vec3((uv + 0.0001 * AA_fuzz) * vec2(width, -height), 0);
     vec3 ray_direction = vec3(render_conf.view_matrix * vec4(global_ray_direction, 0));
 
     RayResult hit = trace(ray_direction, render_conf.origin);
