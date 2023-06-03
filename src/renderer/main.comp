@@ -8,9 +8,13 @@ layout(set = 0, binding = 1) buffer RenderData {
     // rotation
     mat4 view_matrix;
     // position
-    vec3 origin_offset;
+    vec3 origin;
     // width / height
     float aspect_ratio;
+    // the close cutoff line for depth perception
+    float near_plane;
+    // the far cutoff line for depth perception
+    float far_plane;
     // vertical field of view
     float fov;
 } render_conf;
@@ -19,6 +23,8 @@ struct RayResult {
     bool hit;
     vec3 colour;
     vec3 normal;
+    bool front_face;
+    float depth;
 };
 
 RayResult miss(vec3 ray, vec3 origin) {
@@ -33,23 +39,41 @@ RayResult miss(vec3 ray, vec3 origin) {
 
 RayResult sphere(vec3 center, float radius, vec3 dir, vec3 origin) {
     vec3 oc = origin - center;
-    float a = dot(dir, dir);
-    float b = 2.0 * dot(oc, dir);
-    float c = dot(oc, oc) - radius * radius;
-    float discriminant = b * b - 4 * a * c;
+    float a = dir.x * dir.x 
+            + dir.y * dir.y 
+            + dir.z * dir.z;
+    float half_b =  dot(oc, dir);
+    float c = (oc.x * oc.x + oc.y * oc.y + oc.z * oc.z) - radius * radius;
+    float discriminant = half_b * half_b - c * a;
     RayResult ret;
     ret.hit = discriminant > 0;
 
-    if (ret.hit) {
-        float t = (-b - sqrt(discriminant)) / (2.0 * a);
-        if (t > 0.0) {
-            vec3 normal = normalize(oc + dir * t);
-            ret.normal = normal;
-            ret.colour = 0.5 * (normal + vec3(1));
-        } else {
+    if (discriminant < 0) {
+        ret.normal = vec3(0, 0, 0);
+        return ret;
+    }
+
+    float sqrtd = sqrt(discriminant);
+    float root = (-half_b - sqrtd) / a;
+    if (root < render_conf.near_plane || render_conf.far_plane < root) {
+        root = (-half_b + sqrtd) / a;
+        if (root < render_conf.near_plane || render_conf.far_plane < root) {
             ret.hit = false;
+            return ret;
         }
-    } 
+    }
+
+    float d = (-half_b - sqrtd) / a;
+    ret.normal = normalize(oc + dir * d);
+    ret.colour = 0.5 * (ret.normal + vec3(1, 1, 1));
+    ret.depth = 1 - (d - render_conf.near_plane) / render_conf.far_plane;
+
+    if (dot(dir, ret.normal) > 0.0) {
+        ret.front_face = true;
+    } else {
+        ret.normal = -ret.normal;
+        ret.front_face = false;
+    }
 
     return ret;
 }
@@ -63,18 +87,18 @@ RayResult trace(vec3 dir, vec3 origin) {
 }
 
 void main() {
-    vec2 uv = (gl_GlobalInvocationID.xy + vec2(0.5)) / vec2(imageSize(img));
+    vec2 uv = vec2(gl_GlobalInvocationID.xy) / vec2(gl_NumWorkGroups.xy);
 
     float height = 2 * tan(radians(render_conf.fov / 2));
     float width = render_conf.aspect_ratio * height;
-    float focal_length = (width / 2) / tan(radians(render_conf.fov / 2));
+    float focal_length = width / (2 * tan(radians(render_conf.fov / 2)));
 
-    vec3 ll_corner = render_conf.origin_offset - vec3(width, -height, 0) / 2 + vec3(0, 0, focal_length);
+    vec3 ll_corner = render_conf.origin - vec3(width, -height, 0) / 2 + vec3(0, 0, focal_length);
 
     vec3 global_ray_direction = ll_corner + vec3(uv * vec2(width, -height), 0);
     vec3 ray_direction = vec3(render_conf.view_matrix * vec4(global_ray_direction, 0));
 
-    RayResult hit = trace(ray_direction, render_conf.origin_offset);
+    RayResult hit = trace(ray_direction, render_conf.origin);
 
-    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(hit.colour, 1));
+    imageStore(img, ivec2(gl_GlobalInvocationID.xy), vec4(hit.colour, hit.depth));
 }

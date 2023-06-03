@@ -79,6 +79,8 @@ impl Camera {
         buf.fov = dynamic_data.fov;
         buf.aspect_ratio = self.width as f32 / self.height as f32;
         buf.view_matrix = dynamic_data.view_matrix().data.0;
+        buf.near_plane = self.dynamic_data.borrow().near_plane;
+        buf.far_plane = self.dynamic_data.borrow().far_plane;
         Ok(())
     }
 }
@@ -98,6 +100,8 @@ pub struct CameraDataBuffer {
     pub view_matrix: [[f32; 4]; 4],
     pub origin_offset: [[f32; 3]; 1],
     pub aspect_ratio: f32,
+    pub near_plane: f32,
+    pub far_plane: f32,
     pub fov: f32,
 }
 
@@ -328,6 +332,8 @@ impl Renderer {
                 view_matrix: dynamic_data.borrow().view_matrix().data.0,
                 origin_offset: dynamic_data.borrow().pos.data.0,
                 aspect_ratio: width as f32 / height as f32,
+                near_plane: dynamic_data.borrow().near_plane,
+                far_plane: dynamic_data.borrow().far_plane,
                 fov: dynamic_data.borrow().fov,
             },
         )?;
@@ -511,10 +517,17 @@ impl Renderer {
         use image::{ImageBuffer, Rgba};
 
         let buffer_content = buf.read()?;
+
+        // Ignore the alpha channel since it's used for depth
+        let buf: Vec<u8> = buffer_content
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| if (i + 1) % 4 == 0 { std::u8::MAX } else { *b }).collect();
+
         let image = ImageBuffer::<Rgba<u8>, _>::from_raw(
             camera.width / camera.downscale_factor,
             camera.height / camera.downscale_factor,
-            &buffer_content[..],
+            buf,
         )
         .unwrap();
         image.save(name)?;
