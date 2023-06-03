@@ -69,7 +69,7 @@ impl Benchmark {
 pub fn main() -> anyhow::Result<()> {
     drop(dotenv::dotenv());
     drop(color_eyre::install());
-    drop(pretty_env_logger::init());
+    pretty_env_logger::init();
 
     let library = VulkanLibrary::new()?;
     let mut renderer = Renderer::new(library)?;
@@ -113,7 +113,6 @@ pub fn main() -> anyhow::Result<()> {
             pos: Vec3::zeros(),
             rotation: quat_look_at_lh(&Vec3::new(0., 0., 1.), &Vec3::new(0., 1., 0.)),
             samples: 2,
-            ..Default::default()
         },
         8,
         size.width,
@@ -132,13 +131,10 @@ pub fn main() -> anyhow::Result<()> {
     let mut freeze = false;
 
     event_loop.run(move |event, _, control_flow| {
-        match &event {
-            Event::WindowEvent { event, .. } => {
-                if gui.update(&event) {
-                    return;
-                }
+        if let Event::WindowEvent { event, .. } = &event {
+            if gui.update(event) {
+                return;
             }
-            _ => {}
         }
 
         match event {
@@ -168,11 +164,7 @@ pub fn main() -> anyhow::Result<()> {
                 y_rot_accum += y * mouse_speed;
                 let half_pi = pi::<f32>() / 2.;
 
-                if y_rot_accum > half_pi {
-                    y_rot_accum = half_pi;
-                } else if y_rot_accum < -half_pi {
-                    y_rot_accum = -half_pi;
-                }
+                y_rot_accum = y_rot_accum.clamp(-half_pi, half_pi);
 
                 opts.rotation = quat_angle_axis(y_rot_accum, &Vec3::new(1., 0., 0.))
                     * quat_angle_axis(x_rot_accum, &Vec3::new(0., 1., 0.));
@@ -222,7 +214,7 @@ pub fn main() -> anyhow::Result<()> {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap();
-                let filename = format!("{}-screenshot.png", now.as_secs()).to_string();
+                let filename = format!("{}-screenshot.png", now.as_secs());
                 renderer.save_png(&filename, camera.borrow().idx).unwrap();
             }
 

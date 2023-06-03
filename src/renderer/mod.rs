@@ -6,7 +6,7 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
-        CommandBufferUsage, CopyImageInfo, CopyImageToBufferInfo, ResolveImageInfo,
+        CommandBufferUsage, CopyImageToBufferInfo,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -16,9 +16,7 @@ use vulkano::{
         QueueCreateInfo, QueueFlags,
     },
     format::Format,
-    image::{
-        view::ImageView, ImageAccess, ImageDimensions, ImageUsage, StorageImage, SwapchainImage,
-    },
+    image::{view::ImageView, ImageAccess, ImageUsage, StorageImage, SwapchainImage},
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
     pipeline::{ComputePipeline, Pipeline},
@@ -149,8 +147,7 @@ impl Renderer {
 
         let physical_device = instance
             .enumerate_physical_devices()?
-            .filter(|p| p.supported_extensions().contains(&device_extensions))
-            .next()
+            .find(|p| p.supported_extensions().contains(&device_extensions))
             .unwrap();
 
         let queue_family_index = physical_device
@@ -225,7 +222,7 @@ impl Renderer {
 
         let (swapchain, images) = Swapchain::new(
             self.device.clone(),
-            surface.clone(),
+            surface,
             SwapchainCreateInfo {
                 min_image_count: caps.min_image_count + 1,
                 image_format: Some(image_format),
@@ -237,8 +234,6 @@ impl Renderer {
             },
         )
         .unwrap();
-
-        let camera = self.cameras[camera_idx as usize].as_ref().borrow();
 
         let swapchain_preseneter = SwapchainPresenter {
             dirty: false,
@@ -256,7 +251,7 @@ impl Renderer {
     pub fn refresh_swapchain(&mut self, idx: u32, dimensions: [u32; 2]) -> anyhow::Result<()> {
         let s = &mut self.swapchains[idx as usize];
         let (swapchain, images) = match s.swapchain.recreate(SwapchainCreateInfo {
-            image_extent: dimensions.into(),
+            image_extent: dimensions,
             ..s.swapchain.create_info()
         }) {
             Ok(k) => k,
@@ -377,7 +372,6 @@ impl Renderer {
         Ok(camera)
     }
 
-    #[must_use]
     pub fn draw_all(&self) -> anyhow::Result<Box<dyn GpuFuture>> {
         let mut builder = AutoCommandBufferBuilder::primary(
             &self.command_allocator,
@@ -421,7 +415,6 @@ impl Renderer {
         Ok(Box::new(future))
     }
 
-    #[must_use]
     pub fn present(
         &mut self,
         swapchain_index: u32,
@@ -472,7 +465,8 @@ impl Renderer {
         let execution = sync::now(self.device.clone())
             .join(before)
             .join(acquire_future)
-            .then_execute(self.fallback_queue.clone(), command_buffer)?.then_signal_fence();
+            .then_execute(self.fallback_queue.clone(), command_buffer)?
+            .then_signal_fence();
 
         let execution = gui
             .draw_on_image(
@@ -534,7 +528,7 @@ impl Renderer {
         let buffer_content = buf.read()?;
 
         let buf: Vec<u8> = buffer_content
-            .into_iter()
+            .iter()
             .enumerate()
             // Ignore the alpha channel since it's used for depth
             .map(|(i, b)| if (i + 1) % 4 == 0 { std::u8::MAX } else { *b })
