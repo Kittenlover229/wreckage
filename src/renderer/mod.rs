@@ -370,122 +370,113 @@ impl Renderer {
         Ok(camera)
     }
 
-    pub fn draw_all(&self) -> anyhow::Result<()> {
-        let mut futures = vec![];
+    #[must_use]
+    pub fn draw_all(&self) -> anyhow::Result<Box<dyn GpuFuture>> {
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &self.command_allocator,
+            self.fallback_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+
+        builder
+            .bind_pipeline_compute(self.compute_pipeline.clone())
+            .push_constants(
+                self.compute_pipeline.layout().clone(),
+                0,
+                PushConstants {
+                    time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .subsec_micros(),
+                },
+            );
 
         for camera in &self.cameras {
             let camera: &RefCell<Camera> = camera.as_ref();
             let camera = camera.borrow();
 
-            let mut builder = AutoCommandBufferBuilder::primary(
-                &self.command_allocator,
-                self.fallback_queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )?;
-
             builder
-                .bind_pipeline_compute(self.compute_pipeline.clone())
                 .bind_descriptor_sets(
                     vulkano::pipeline::PipelineBindPoint::Compute,
                     self.compute_pipeline.layout().clone(),
                     0,
                     camera.descriptors.clone(),
                 )
-                .push_constants(
-                    self.compute_pipeline.layout().clone(),
-                    0,
-                    PushConstants {
-                        time: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)?
-                            .subsec_micros(),
-                    },
-                )
                 .dispatch([
                     camera.width,
                     camera.height,
                     camera.dynamic_data.borrow().samples,
                 ])?;
-
-            let command_buffer = builder.build()?;
-
-            let future = sync::now(self.device.clone())
-                .then_execute(self.fallback_queue.clone(), command_buffer)?
-                .then_signal_fence_and_flush()?;
-
-            futures.push(future);
         }
 
-        for future in futures {
-            future.wait(None)?;
-        }
+        let future = sync::now(self.device.clone())
+            .then_execute(self.fallback_queue.clone(), builder.build()?)?;
 
-        Ok(())
+        Ok(Box::new(future))
     }
 
-    pub fn present_all(&mut self) -> anyhow::Result<()> {
-        for swapchain_presenter in &mut self.swapchains {
-            let SwapchainPresenter {
-                swapchain,
-                dirty,
-                images,
-                ..
-            } = swapchain_presenter;
+    #[must_use]
+    pub fn present(
+        &mut self,
+        swapchain_index: u32,
+        before: Box<dyn GpuFuture>,
+    ) -> anyhow::Result<()> {
+        let SwapchainPresenter {
+            swapchain,
+            dirty,
+            images,
+            camera_idx,
+            ..
+        } = &mut self.swapchains[swapchain_index as usize];
 
-            if *dirty {
-                continue;
-            }
-
-            let (image_i, suboptimal, acquire_future) =
-                match swapchain::acquire_next_image(swapchain.clone(), None) {
-                    Ok(r) => r,
-                    Err(AcquireError::OutOfDate) => {
-                        *dirty = true;
-                        continue;
-                    }
-                    Err(e) => return Err(e.into()),
-                };
-
-            if suboptimal {
-                *dirty = true
-            }
-
-            let mut builder = AutoCommandBufferBuilder::primary(
-                &self.command_allocator,
-                self.fallback_queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )?;
-
-            let camera: &RefCell<Camera> =
-                self.cameras[swapchain_presenter.camera_idx as usize].borrow();
-            let camera = camera.borrow();
-
-            builder.blit_image(BlitImageInfo::images(
-                camera.out_buffer.clone(),
-                images[image_i as usize].clone(),
-            ))?;
-            let command_buffer = builder.build()?;
-
-            let execution = sync::now(self.device.clone())
-                .join(acquire_future)
-                .then_execute(self.fallback_queue.clone(), command_buffer)?
-                .then_swapchain_present(
-                    self.fallback_queue.clone(),
-                    SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
-                )
-                .then_signal_fence_and_flush();
-
-            match execution {
-                Ok(future) => {
-                    future.wait(None)?; // wait for the GPU to finish
-                }
-                Err(FlushError::OutOfDate) => {
-                    *dirty = true;
-                }
-                Err(e) => {
-                    println!("Failed to flush future: {e}");
-                }
-            }
+        if *dirty {
+            return Ok(());
         }
+
+        let (image_i, suboptimal, acquire_future) =
+            match swapchain::acquire_next_image(swapchain.clone(), None) {
+                Ok(r) => r,
+                Err(AcquireError::OutOfDate) => {
+                    *dirty = true;
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+        if suboptimal {
+            *dirty = true
+        }
+
+        let mut builder = AutoCommandBufferBuilder::primary(
+            &self.command_allocator,
+            self.fallback_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+
+        let camera: &RefCell<Camera> = self.cameras[*camera_idx as usize].borrow();
+        let camera = camera.borrow();
+
+        builder.blit_image(BlitImageInfo::images(
+            camera.out_buffer.clone(),
+            images[image_i as usize].clone(),
+        ))?;
+        let command_buffer = builder.build()?;
+
+        let execution = sync::now(self.device.clone())
+            .join(before)
+            .join(acquire_future)
+            .then_execute(self.fallback_queue.clone(), command_buffer)?
+            .then_swapchain_present(
+                self.fallback_queue.clone(),
+                SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
+            )
+            .then_signal_fence_and_flush();
+
+        match execution {
+            Ok(future) => future.wait(None)?,
+            Err(FlushError::OutOfDate) => *dirty = true,
+            Err(e) => return Err(e.into()),
+        }
+
         Ok(())
     }
 

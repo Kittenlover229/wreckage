@@ -108,15 +108,15 @@ pub fn main() -> anyhow::Result<()> {
             dt = (now - last_frame).as_secs_f32();
             last_frame = now;
             fps_timer += dt;
-            
+
             if fps_timer > 1.0 {
                 debug!("FPS: {}", fps_counter);
                 fps_counter = 0;
                 fps_timer = 0.;
             }
 
-            renderer.draw_all().unwrap();
-            renderer.present_all().unwrap();
+            let draw_future = renderer.draw_all().unwrap();
+            renderer.present(0, draw_future).unwrap();
             fps_counter += 1;
         }
         _ => (),
