@@ -4,6 +4,10 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba8) uniform image2DArray img;
 
+layout(set = 0, binding = 2) buffer readonly ReadonlyConstants {
+    vec3 albedo[4];
+};
+
 layout(set = 0, binding = 1) buffer RenderData {
     // rotation
     mat4 view_matrix;
@@ -86,7 +90,7 @@ RayResult sphere(vec3 center, float radius, vec3 dir, vec3 origin) {
 
     float d = (-half_b - sqrtd) / a;
     ret.normal = normalize(oc + dir * d);
-    ret.colour = 0.5 * (ret.normal + vec3(1, 1, 1));
+    ret.colour = albedo[0];
     ret.depth = 1 - (d - render_conf.near_plane) / render_conf.far_plane;
 
     if (dot(dir, ret.normal) > 0.0) {

@@ -28,6 +28,8 @@ use vulkano::{
     VulkanLibrary,
 };
 
+use self::object::MaterialTableBuffer;
+
 mod object;
 mod shaders;
 
@@ -105,6 +107,12 @@ pub struct PushConstants {
     time: u32,
 }
 
+#[derive(BufferContents)]
+#[repr(C)]
+pub struct ReadonlyConstants {
+    pub material_table: MaterialTableBuffer,
+}
+
 pub struct Renderer {
     pub cameras: Vec<Arc<RefCell<Camera>>>,
     pub swapchains: Vec<SwapchainPresenter>,
@@ -122,6 +130,7 @@ pub struct Renderer {
 
     // Rendering
     pub compute_pipeline: Arc<ComputePipeline>,
+    pub readonly_constants: Subbuffer<ReadonlyConstants>,
 }
 
 impl Renderer {
@@ -190,6 +199,21 @@ impl Renderer {
             |_| {},
         )?;
 
+        let readonly_constants = Buffer::from_data(
+            &buffer_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            ReadonlyConstants {
+                material_table: MaterialTableBuffer::default(),
+            },
+        )?;
+
         let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
 
         Ok(Self {
@@ -203,6 +227,7 @@ impl Renderer {
             command_allocator,
             descriptor_allocator,
             compute_pipeline: pipeline,
+            readonly_constants,
         })
     }
 
@@ -261,7 +286,7 @@ impl Renderer {
 
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
         let samples = camera.dynamic_data.borrow().samples.to_owned();
-        
+
         camera.width = dimensions[0];
         camera.height = dimensions[1];
         camera.out_buffer = StorageImage::new(
@@ -278,7 +303,6 @@ impl Renderer {
         let pipeline_layout = self.compute_pipeline.layout();
         let descriptor_layouts = pipeline_layout.set_layouts();
 
-
         camera.descriptors = PersistentDescriptorSet::new(
             &self.descriptor_allocator,
             descriptor_layouts[0].clone(),
@@ -289,6 +313,7 @@ impl Renderer {
                     ImageView::new_default(camera.out_buffer.clone())?,
                 ),
                 WriteDescriptorSet::buffer(1, camera.data_buffer.clone()),
+                WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
             ],
         )?;
 
@@ -355,6 +380,7 @@ impl Renderer {
                     ImageView::new_default(out_buffer.clone())?,
                 ),
                 WriteDescriptorSet::buffer(1, camera_data_buffer.clone()),
+                WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
             ],
         )?;
 
