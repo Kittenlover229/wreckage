@@ -5,7 +5,6 @@ use egui_winit_vulkano::{
     egui::{epaint::Shadow, Visuals},
     Gui, GuiConfig,
 };
-use log::debug;
 use nalgebra_glm::{pi, quat_angle_axis, quat_look_at_lh, Vec3};
 pub use renderer::*;
 use vulkano::VulkanLibrary;
@@ -19,6 +18,7 @@ use winit::{
 pub struct Benchmark {
     capacity: usize,
     data: VecDeque<f64>,
+    fps: u32,
 }
 
 use egui_winit_vulkano::egui::plot::*;
@@ -29,6 +29,7 @@ impl Benchmark {
         Self {
             // TODO: use fps cap as capacity
             capacity,
+            fps: 0,
             data: VecDeque::with_capacity(capacity),
         }
     }
@@ -44,13 +45,14 @@ impl Benchmark {
         let bad = HLine::new(1000.0 / 60.0).color(Color32::RED);
 
         ui.label("Frametime (Draw + Present)");
+        ui.label(format!("FPS: {}", self.fps));
         Plot::new("plot")
             .view_aspect(2.0)
             .include_y(0)
             .show(ui, |plot_ui| {
                 plot_ui.line(curve);
                 plot_ui.hline(ok);
-                plot_ui.hline(bad)
+                plot_ui.hline(bad);
             });
         ui.label("Green line is frametime for 30 FPS");
         ui.label("Red line is frametime for 60 FPS");
@@ -247,7 +249,7 @@ pub fn main() -> anyhow::Result<()> {
 
                 fps_timer += dt;
                 if fps_timer > 1.0 {
-                    debug!("FPS: {}", fps_counter);
+                    egui_bench.fps = fps_counter;
                     fps_counter = 0;
                     fps_timer = 0.;
                 }
