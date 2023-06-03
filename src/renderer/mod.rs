@@ -100,6 +100,12 @@ pub struct CameraDataBuffer {
     pub fov: f32,
 }
 
+#[derive(BufferContents, Debug)]
+#[repr(C)]
+pub struct PushConstants {
+    time: u32,
+}
+
 pub struct Renderer {
     pub cameras: Vec<Arc<RefCell<Camera>>>,
     swapchains: Vec<SwapchainPresenter>,
@@ -384,6 +390,15 @@ impl Renderer {
                     self.compute_pipeline.layout().clone(),
                     0,
                     camera.descriptors.clone(),
+                )
+                .push_constants(
+                    self.compute_pipeline.layout().clone(),
+                    0,
+                    PushConstants {
+                        time: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)?
+                            .subsec_micros(),
+                    },
                 )
                 .dispatch([
                     camera.width,

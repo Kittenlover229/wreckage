@@ -19,21 +19,25 @@ layout(set = 0, binding = 1) buffer RenderData {
     float fov;
 } render_conf;
 
-uint x = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y + gl_GlobalInvocationID.z;
+layout(push_constant) uniform PushConstants {
+    uint time;
+} push_constants;
+
+uint seed = (gl_GlobalInvocationID.x + gl_GlobalInvocationID.y) * gl_GlobalInvocationID.z;
 
 // Bob Jenkins's One-At-A-Time
-uint random() {
-    x += (x << 10u);
-    x ^= (x >>  6u);
-    x += (x <<  3u);
-    x ^= (x >> 11u);
-    x += (x << 15u);
-    return x;
+uint stable_random() {
+    seed += (seed << 10u);
+    seed ^= (seed >>  6u);
+    seed += (seed <<  3u);
+    seed ^= (seed >> 11u);
+    seed += (seed << 15u);
+    return seed;
 }
 
-float random_01() {
-    uint rand = random();
-    return (rand % 0xFF) / 255.;
+float stable_random_01() {
+    uint rand = stable_random();
+    return (rand % 0xFFFF) / float(0xFFFF);
 }
 
 struct RayResult {
@@ -104,7 +108,7 @@ RayResult trace(vec3 dir, vec3 origin) {
 }
 
 void main() {
-    vec2 uv = vec2(gl_GlobalInvocationID.xy) / (vec2(gl_NumWorkGroups.xy) - vec2(1));
+    vec2 uv = vec2(gl_GlobalInvocationID.xy) / (vec2(gl_NumWorkGroups.xy));
 
     float height = 2 * tan(radians(render_conf.fov / 2));
     float width = render_conf.aspect_ratio * height;
@@ -112,8 +116,8 @@ void main() {
 
     vec3 ll_corner = render_conf.origin - vec3(width, -height, 0) / 2 + vec3(0, 0, focal_length);
 
-    vec2 AA_fuzz = vec2(random_01(), -random_01() * random_01() * 2);
-    vec3 global_ray_direction = ll_corner + vec3((uv + 0.005 * AA_fuzz) * vec2(width, -height), 0);
+    vec2 AA_fuzz = 2 * vec2(stable_random_01(), stable_random_01()) - 1;
+    vec3 global_ray_direction = ll_corner + vec3((uv + 0.0005 * AA_fuzz) * vec2(width, -height), 0);
     vec3 ray_direction = vec3(render_conf.view_matrix * vec4(global_ray_direction, 0));
 
     RayResult hit = trace(ray_direction, render_conf.origin);
