@@ -1,11 +1,12 @@
 use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
+use egui_winit_vulkano::Gui;
 use nalgebra_glm::{Mat4, Quat, Vec3};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
-        CommandBufferUsage, CopyImageToBufferInfo,
+        CommandBufferUsage, CopyImageInfo, CopyImageToBufferInfo, ResolveImageInfo,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -14,9 +15,9 @@ use vulkano::{
         physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Queue,
         QueueCreateInfo, QueueFlags,
     },
+    format::Format,
     image::{
-        view::{ImageView, ImageViewCreateInfo},
-        ImageAccess, ImageUsage, StorageImage, SwapchainImage,
+        view::ImageView, ImageAccess, ImageDimensions, ImageUsage, StorageImage, SwapchainImage,
     },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
@@ -126,6 +127,10 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    pub fn camera_format() -> Format {
+        Format::R8G8B8A8_UNORM
+    }
+
     pub fn new(library: Arc<VulkanLibrary>) -> anyhow::Result<Self> {
         let required_extensions = vulkano_win::required_extensions(&library);
 
@@ -155,7 +160,7 @@ impl Renderer {
             .position(|(_queue_family_index, queue_family_properties)| {
                 queue_family_properties
                     .queue_flags
-                    .contains(QueueFlags::COMPUTE | QueueFlags::TRANSFER)
+                    .contains(QueueFlags::COMPUTE | QueueFlags::TRANSFER | QueueFlags::GRAPHICS)
             })
             .expect("couldn't find a graphical queue family")
             as u32;
@@ -212,26 +217,28 @@ impl Renderer {
             .expect("failed to get surface capabilities");
 
         let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
-        let image_format = Some(
-            self.physical
-                .surface_formats(&surface, Default::default())
-                .unwrap()[0]
-                .0,
-        );
+        let image_format = self
+            .physical
+            .surface_formats(&surface, Default::default())
+            .unwrap()[0]
+            .0;
 
         let (swapchain, images) = Swapchain::new(
             self.device.clone(),
             surface.clone(),
             SwapchainCreateInfo {
                 min_image_count: caps.min_image_count + 1,
-                image_format,
+                image_format: Some(image_format),
                 image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                 composite_alpha,
-                present_mode: PresentMode::Immediate,
+                // TODO: check if present mode is supported
+                present_mode: PresentMode::Fifo,
                 ..Default::default()
             },
         )
         .unwrap();
+
+        let camera = self.cameras[camera_idx as usize].as_ref().borrow();
 
         let swapchain_preseneter = SwapchainPresenter {
             dirty: false,
@@ -267,7 +274,7 @@ impl Renderer {
                 height: dimensions[1] / camera.downscale_factor,
                 array_layers: samples,
             },
-            vulkano::format::Format::R8G8B8A8_UNORM,
+            Renderer::camera_format(),
             Some(self.fallback_queue.queue_family_index()),
         )?;
 
@@ -313,7 +320,7 @@ impl Renderer {
                 height: height / downscale_factor,
                 array_layers: dynamic_data.samples,
             },
-            vulkano::format::Format::R8G8B8A8_UNORM,
+            Renderer::camera_format(),
             Some(self.fallback_queue.queue_family_index()),
         )?;
 
@@ -419,6 +426,7 @@ impl Renderer {
         &mut self,
         swapchain_index: u32,
         before: Box<dyn GpuFuture>,
+        gui: &mut Gui,
     ) -> anyhow::Result<()> {
         let SwapchainPresenter {
             swapchain,
@@ -464,7 +472,13 @@ impl Renderer {
         let execution = sync::now(self.device.clone())
             .join(before)
             .join(acquire_future)
-            .then_execute(self.fallback_queue.clone(), command_buffer)?
+            .then_execute(self.fallback_queue.clone(), command_buffer)?.then_signal_fence();
+
+        let execution = gui
+            .draw_on_image(
+                execution,
+                ImageView::new_default(images[image_i as usize].clone())?,
+            )
             .then_swapchain_present(
                 self.fallback_queue.clone(),
                 SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i),
