@@ -7,7 +7,8 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
-        CommandBufferUsage, CopyImageToBufferInfo,
+        CommandBufferInheritanceInfo, CommandBufferUsage, CopyImageToBufferInfo,
+        SecondaryAutoCommandBuffer, SecondaryCommandBufferAbstract,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -63,6 +64,7 @@ pub struct Camera {
     pub descriptors: Arc<PersistentDescriptorSet>,
     pub out_buffer: Arc<dyn ImageAccess>,
     pub data_buffer: Subbuffer<CameraDataBuffer>,
+    pub render_command_buffer: Arc<SecondaryAutoCommandBuffer>,
 }
 
 impl Camera {
@@ -102,9 +104,10 @@ pub struct CameraDataBuffer {
     pub fov: f32,
 }
 
+// Buffer for data updated every frame
 #[derive(BufferContents, Debug)]
 #[repr(C)]
-pub struct PushConstants {
+pub struct HotBuffer {
     time: u32,
 }
 
@@ -132,6 +135,7 @@ pub struct Renderer {
     // Rendering
     pub compute_pipeline: Arc<ComputePipeline>,
     pub readonly_constants: Subbuffer<ReadonlyConstants>,
+    pub hotbuffer: Subbuffer<HotBuffer>,
 }
 
 impl Renderer {
@@ -203,6 +207,7 @@ impl Renderer {
         let command_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
+        let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
         let shader = shaders::main::load(device.clone())?;
         let pipeline = ComputePipeline::new(
             device.clone(),
@@ -227,9 +232,21 @@ impl Renderer {
             },
         )?;
 
-        let descriptor_allocator = StandardDescriptorSetAllocator::new(device.clone());
+        let hotbuffer = Buffer::from_data(
+            &buffer_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            HotBuffer { time: 0u32 },
+        )?;
 
         Ok(Self {
+            hotbuffer,
             cameras: vec![],
             swapchains: vec![],
             instance,
@@ -300,6 +317,13 @@ impl Renderer {
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
         let samples = camera.dynamic_data.borrow().samples.to_owned();
 
+        let mut cmd_builder = AutoCommandBufferBuilder::secondary(
+            &self.command_allocator,
+            self.fallback_queue.queue_family_index(),
+            CommandBufferUsage::MultipleSubmit,
+            CommandBufferInheritanceInfo::default(),
+        )?;
+
         camera.width = dimensions[0];
         camera.height = dimensions[1];
         camera.out_buffer = StorageImage::new(
@@ -327,8 +351,24 @@ impl Renderer {
                 ),
                 WriteDescriptorSet::buffer(1, camera.data_buffer.clone()),
                 WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
+                WriteDescriptorSet::buffer(3, self.hotbuffer.clone()),
             ],
         )?;
+
+        cmd_builder
+            .bind_descriptor_sets(
+                self.compute_pipeline.bind_point(),
+                self.compute_pipeline.layout().clone(),
+                0,
+                camera.descriptors.clone(),
+            )
+            .bind_pipeline_compute(self.compute_pipeline.clone())
+            .dispatch([
+                camera.width / camera.downscale_factor,
+                camera.height / camera.downscale_factor,
+                camera.dynamic_data.borrow().samples,
+            ])?;
+        camera.render_command_buffer = Arc::new(cmd_builder.build()?);
 
         camera.refresh_data_buffer()?;
 
@@ -394,8 +434,31 @@ impl Renderer {
                 ),
                 WriteDescriptorSet::buffer(1, camera_data_buffer.clone()),
                 WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
+                WriteDescriptorSet::buffer(3, self.hotbuffer.clone()),
             ],
         )?;
+
+        // TODO: DRY THIS
+        let mut cmd_builder = AutoCommandBufferBuilder::secondary(
+            &self.command_allocator,
+            self.fallback_queue.queue_family_index(),
+            CommandBufferUsage::MultipleSubmit,
+            CommandBufferInheritanceInfo::default(),
+        )?;
+
+        cmd_builder
+            .bind_descriptor_sets(
+                self.compute_pipeline.bind_point(),
+                self.compute_pipeline.layout().clone(),
+                0,
+                descriptor_set.clone(),
+            )
+            .bind_pipeline_compute(self.compute_pipeline.clone())
+            .dispatch([
+                width / downscale_factor,
+                height / downscale_factor,
+                dynamic_data.borrow().samples,
+            ])?;
 
         let camera = Arc::new(RefCell::new(Camera {
             width,
@@ -406,6 +469,7 @@ impl Renderer {
             descriptors: descriptor_set,
             downscale_factor,
             data_buffer: camera_data_buffer,
+            render_command_buffer: Arc::new(cmd_builder.build()?),
         }));
 
         self.cameras.push(camera.clone());
@@ -420,34 +484,17 @@ impl Renderer {
             CommandBufferUsage::OneTimeSubmit,
         )?;
 
-        builder
-            .bind_pipeline_compute(self.compute_pipeline.clone())
-            .push_constants(
-                self.compute_pipeline.layout().clone(),
-                0,
-                PushConstants {
-                    time: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)?
-                        .subsec_micros(),
-                },
-            );
+        {
+            let mut hotbuffer = self.hotbuffer.write()?;
+            hotbuffer.time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .subsec_micros();
+        }
 
         for camera in &self.cameras {
             let camera: &RefCell<Camera> = camera.as_ref();
             let camera = camera.borrow();
-
-            builder
-                .bind_descriptor_sets(
-                    vulkano::pipeline::PipelineBindPoint::Compute,
-                    self.compute_pipeline.layout().clone(),
-                    0,
-                    camera.descriptors.clone(),
-                )
-                .dispatch([
-                    camera.width / camera.downscale_factor,
-                    camera.height / camera.downscale_factor,
-                    camera.dynamic_data.borrow().samples,
-                ])?;
+            builder.execute_commands(camera.render_command_buffer.clone())?;
         }
 
         let future = sync::now(self.device.clone())

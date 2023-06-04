@@ -23,11 +23,11 @@ layout(set = 0, binding = 1) buffer RenderData {
     float fov;
 } render_conf;
 
-layout(push_constant) uniform PushConstants {
+layout(set = 0, binding = 3) buffer HotBuffer {
     uint time;
-} push_constants;
+} hot;
 
-uint seed = (gl_GlobalInvocationID.x + gl_GlobalInvocationID.y) * gl_GlobalInvocationID.z;
+uint seed = (gl_GlobalInvocationID.x + gl_GlobalInvocationID.y) * gl_GlobalInvocationID.z * hot.time;
 
 // Bob Jenkins's One-At-A-Time
 uint stable_random() {
