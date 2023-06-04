@@ -1,6 +1,7 @@
 use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
 use egui_winit_vulkano::Gui;
+use log::debug;
 use nalgebra_glm::{Mat4, Quat, Vec3};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -12,8 +13,8 @@ use vulkano::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
     },
     device::{
-        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Queue,
-        QueueCreateInfo, QueueFlags,
+        physical::{PhysicalDevice, PhysicalDeviceType},
+        Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
     },
     format::Format,
     image::{view::ImageView, ImageAccess, ImageUsage, StorageImage, SwapchainImage},
@@ -156,8 +157,20 @@ impl Renderer {
 
         let physical_device = instance
             .enumerate_physical_devices()?
-            .find(|p| p.supported_extensions().contains(&device_extensions))
+            .min_by_key(|p| match p.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 0,
+                PhysicalDeviceType::IntegratedGpu => 1,
+                PhysicalDeviceType::VirtualGpu => 2,
+                PhysicalDeviceType::Cpu => 3,
+
+                // Note that there exists `PhysicalDeviceType::Other`, however,
+                // `PhysicalDeviceType` is a non-exhaustive enum. Thus, one should
+                // match wildcard `_` to catch all unknown device types.
+                _ => 4,
+            })
             .unwrap();
+
+        debug!("Using device {}", physical_device.properties().device_name);
 
         let queue_family_index = physical_device
             .queue_family_properties()
