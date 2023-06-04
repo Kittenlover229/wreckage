@@ -3,12 +3,13 @@ use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 use egui_winit_vulkano::Gui;
 use log::debug;
 use nalgebra_glm::{Mat4, Quat, Vec3};
+use smallvec::SmallVec;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
         CommandBufferInheritanceInfo, CommandBufferUsage, CopyImageToBufferInfo,
-        SecondaryAutoCommandBuffer, SecondaryCommandBufferAbstract,
+        PrimaryAutoCommandBuffer, SecondaryAutoCommandBuffer, SecondaryCommandBufferAbstract,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -20,7 +21,9 @@ use vulkano::{
     format::Format,
     image::{view::ImageView, ImageAccess, ImageUsage, StorageImage, SwapchainImage},
     instance::{Instance, InstanceCreateInfo},
-    memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
+    memory::allocator::{
+        AllocationCreateInfo, MemoryAllocator, MemoryUsage, StandardMemoryAllocator,
+    },
     pipeline::{ComputePipeline, Pipeline},
     swapchain::{
         self, AcquireError, PresentMode, Surface, Swapchain, SwapchainCreateInfo,
@@ -64,7 +67,7 @@ pub struct Camera {
     pub descriptors: Arc<PersistentDescriptorSet>,
     pub out_buffer: Arc<dyn ImageAccess>,
     pub data_buffer: Subbuffer<CameraDataBuffer>,
-    pub render_command_buffer: Arc<SecondaryAutoCommandBuffer>,
+    pub render_command_buffer: Arc<PrimaryAutoCommandBuffer>,
 }
 
 impl Camera {
@@ -317,11 +320,10 @@ impl Renderer {
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
         let samples = camera.dynamic_data.borrow().samples.to_owned();
 
-        let mut cmd_builder = AutoCommandBufferBuilder::secondary(
+        let mut cmd_builder = AutoCommandBufferBuilder::primary(
             &self.command_allocator,
             self.fallback_queue.queue_family_index(),
             CommandBufferUsage::MultipleSubmit,
-            CommandBufferInheritanceInfo::default(),
         )?;
 
         camera.width = dimensions[0];
@@ -439,11 +441,10 @@ impl Renderer {
         )?;
 
         // TODO: DRY THIS
-        let mut cmd_builder = AutoCommandBufferBuilder::secondary(
+        let mut cmd_builder = AutoCommandBufferBuilder::primary(
             &self.command_allocator,
             self.fallback_queue.queue_family_index(),
             CommandBufferUsage::MultipleSubmit,
-            CommandBufferInheritanceInfo::default(),
         )?;
 
         cmd_builder
@@ -478,12 +479,6 @@ impl Renderer {
     }
 
     pub fn draw_all(&self) -> anyhow::Result<Box<dyn GpuFuture>> {
-        let mut builder = AutoCommandBufferBuilder::primary(
-            &self.command_allocator,
-            self.fallback_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-
         {
             let mut hotbuffer = self.hotbuffer.write()?;
             hotbuffer.time = std::time::SystemTime::now()
@@ -494,13 +489,14 @@ impl Renderer {
         for camera in &self.cameras {
             let camera: &RefCell<Camera> = camera.as_ref();
             let camera = camera.borrow();
-            builder.execute_commands(camera.render_command_buffer.clone())?;
+            let future = sync::now(self.device.clone()).then_execute(
+                self.fallback_queue.clone(),
+                camera.render_command_buffer.clone(),
+            )?;
+            return Ok(Box::new(future));
         }
 
-        let future = sync::now(self.device.clone())
-            .then_execute(self.fallback_queue.clone(), builder.build()?)?;
-
-        Ok(Box::new(future))
+        unimplemented!();
     }
 
     pub fn present(

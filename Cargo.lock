@@ -2466,6 +2466,7 @@ dependencies = [
  "log",
  "nalgebra-glm",
  "pretty_env_logger",
+ "smallvec",
  "vulkano",
  "vulkano-shaders",
  "vulkano-win",

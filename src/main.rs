@@ -19,6 +19,7 @@ pub struct Benchmark {
     capacity: usize,
     data: VecDeque<f64>,
     fps: u32,
+    avg_frametime_secs: f64,
 }
 
 use egui_winit_vulkano::egui::plot::*;
@@ -30,6 +31,7 @@ impl Benchmark {
             // TODO: use fps cap as capacity
             capacity,
             fps: 0,
+            avg_frametime_secs: 0f64,
             data: VecDeque::with_capacity(capacity),
         }
     }
@@ -43,13 +45,19 @@ impl Benchmark {
         let curve = Line::new(PlotPoints::from_iter(iter)).color(Color32::BLUE);
         let ok = HLine::new(1000.0 / 30.0).color(Color32::GREEN);
         let bad = HLine::new(1000.0 / 60.0).color(Color32::RED);
+        let avg = HLine::new(self.avg_frametime_secs * 1000.0).color(Color32::DARK_BLUE);
 
         ui.label("Frametime (Draw + Present)");
-        ui.label(format!("FPS: {}", self.fps));
+        ui.label(format!(
+            "FPS: {}\nAverage Frametime: {}μs",
+            self.fps,
+            (self.avg_frametime_secs * 10e6) as u64
+        ));
         Plot::new("plot")
             .view_aspect(2.0)
             .include_y(0)
             .show(ui, |plot_ui| {
+                plot_ui.hline(avg);
                 plot_ui.line(curve);
                 plot_ui.hline(ok);
                 plot_ui.hline(bad);
@@ -62,7 +70,11 @@ impl Benchmark {
         if self.data.len() >= self.capacity {
             self.data.pop_front();
         }
+
         self.data.push_back(v);
+        let samples = self.data.len() as f64;
+        self.avg_frametime_secs -= self.avg_frametime_secs / samples;
+        self.avg_frametime_secs += v / samples;
     }
 }
 
