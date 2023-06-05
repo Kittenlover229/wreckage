@@ -1,15 +1,19 @@
-use std::{borrow::Borrow, cell::RefCell, sync::Arc};
+use std::{
+    borrow::Borrow,
+    cell::{RefCell, RefMut},
+    sync::Arc,
+};
 
 use egui_winit_vulkano::Gui;
 use log::debug;
 use nalgebra_glm::{Mat4, Quat, Vec3};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
-        CommandBufferInheritanceInfo, CommandBufferUsage, CopyImageToBufferInfo,
-        PrimaryAutoCommandBuffer, SecondaryAutoCommandBuffer, SecondaryCommandBufferAbstract,
+        CommandBufferUsage, CopyImageToBufferInfo,
+        PrimaryAutoCommandBuffer,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -24,7 +28,7 @@ use vulkano::{
     },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{
-        AllocationCreateInfo, MemoryAllocator, MemoryUsage, StandardMemoryAllocator,
+        AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator,
     },
     pipeline::{ComputePipeline, Pipeline},
     swapchain::{
@@ -96,6 +100,7 @@ pub struct SwapchainPresenter {
 
     pub swapchain: Arc<Swapchain>,
     pub images: Vec<Arc<SwapchainImage>>,
+    pub blit_command_buffers: SmallVec<[Arc<PrimaryAutoCommandBuffer>; 4]>,
 }
 
 #[derive(BufferContents, Debug, Default)]
@@ -267,11 +272,14 @@ impl Renderer {
     }
 
     #[must_use]
-    pub fn attach_swapchain(&mut self, camera_idx: u32, surface: Arc<Surface>) -> u32 {
+    pub fn attach_swapchain(
+        &mut self,
+        camera_idx: u32,
+        surface: Arc<Surface>,
+    ) -> anyhow::Result<u32> {
         let caps = self
             .physical
-            .surface_capabilities(&surface, Default::default())
-            .expect("failed to get surface capabilities");
+            .surface_capabilities(&surface, Default::default())?;
 
         let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
         let image_format = self
@@ -292,8 +300,27 @@ impl Renderer {
                 present_mode: PresentMode::Immediate,
                 ..Default::default()
             },
-        )
-        .unwrap();
+        )?;
+
+        let mut blit_command_buffers = smallvec![];
+        for image in &images {
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &self.command_allocator,
+                self.fallback_queue.queue_family_index(),
+                CommandBufferUsage::MultipleSubmit,
+            )?;
+
+            let camera: &RefCell<Camera> = self.cameras[camera_idx as usize].borrow();
+            let camera = camera.borrow();
+
+            builder.blit_image(BlitImageInfo::images(
+                camera.out_buffer.clone(),
+                image.clone(),
+            ))?;
+            let command_buffer = builder.build()?;
+
+            blit_command_buffers.push(Arc::new(command_buffer));
+        }
 
         let swapchain_preseneter = SwapchainPresenter {
             dirty: false,
@@ -301,11 +328,12 @@ impl Renderer {
             swapchain,
             images,
             camera_idx,
+            blit_command_buffers,
         };
 
         let idx = swapchain_preseneter.idx;
         self.swapchains.push(swapchain_preseneter);
-        idx
+        Ok(idx)
     }
 
     pub fn refresh_swapchain(&mut self, idx: u32, dimensions: [u32; 2]) -> anyhow::Result<()> {
@@ -379,9 +407,25 @@ impl Renderer {
                 camera.dynamic_data.borrow().samples,
             ])?;
         camera.render_command_buffer = Arc::new(cmd_builder.build()?);
-
         camera.refresh_data_buffer()?;
 
+        let mut blit_command_buffers = smallvec![];
+        for image in &images {
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &self.command_allocator,
+                self.fallback_queue.queue_family_index(),
+                CommandBufferUsage::MultipleSubmit,
+            )?;
+
+            builder.blit_image(BlitImageInfo::images(
+                camera.out_buffer.clone(),
+                image.clone(),
+            ))?;
+
+            blit_command_buffers.push(Arc::new(builder.build()?));
+        }
+
+        s.blit_command_buffers = blit_command_buffers;
         s.dirty = false;
         s.swapchain = swapchain;
         s.images = images;
@@ -518,12 +562,29 @@ impl Renderer {
         gui: &mut Gui,
     ) -> anyhow::Result<()> {
         let SwapchainPresenter {
+            dirty, camera_idx, ..
+        } = self.swapchains[swapchain_index as usize];
+        if dirty {
+            let cam = self.cameras[camera_idx as usize].as_ref().borrow();
+            let width = cam.width;
+            let height = cam.height;
+            let downscale_factor = cam.downscale_factor;
+            drop(cam);
+
+            self.refresh_swapchain(
+                swapchain_index,
+                [width / downscale_factor, height / downscale_factor],
+            )?;
+        }
+
+        let s = &mut self.swapchains[swapchain_index as usize];
+        let SwapchainPresenter {
             swapchain,
             dirty,
             images,
-            camera_idx,
+            blit_command_buffers,
             ..
-        } = &mut self.swapchains[swapchain_index as usize];
+        } = s;
 
         if *dirty {
             return Ok(());
@@ -543,25 +604,13 @@ impl Renderer {
             *dirty = true;
         }
 
-        let mut builder = AutoCommandBufferBuilder::primary(
-            &self.command_allocator,
-            self.fallback_queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-
-        let camera: &RefCell<Camera> = self.cameras[*camera_idx as usize].borrow();
-        let camera = camera.borrow();
-
-        builder.blit_image(BlitImageInfo::images(
-            camera.out_buffer.clone(),
-            images[image_i as usize].clone(),
-        ))?;
-        let command_buffer = builder.build()?;
-
         let execution = sync::now(self.device.clone())
             .join(before)
             .join(acquire_future)
-            .then_execute(self.fallback_queue.clone(), command_buffer)?
+            .then_execute(
+                self.fallback_queue.clone(),
+                blit_command_buffers[image_i as usize].clone(),
+            )?
             .then_signal_fence();
 
         let execution = gui

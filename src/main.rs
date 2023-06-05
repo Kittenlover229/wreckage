@@ -131,7 +131,9 @@ pub fn main() -> anyhow::Result<()> {
         size.height,
     )?;
 
-    let swapchain_idx = renderer.attach_swapchain(camera.borrow().idx, surface);
+    let swapchain_idx = renderer
+        .attach_swapchain(camera.borrow().idx, surface)
+        .unwrap();
     let mouse_speed = 0.001;
 
     let mut dt = 0.;
