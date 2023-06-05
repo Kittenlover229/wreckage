@@ -1,13 +1,23 @@
 #version 460
 
+#define MAX_OBJECTS 4096
 
 #pragma region 
 
 // Bounding Volume Hierarchy Axis-Aligned Bounding Box
 struct BVHAABB {
+    vec3 aabb_min;
+    vec3 aabb_max;
+    vec3 aabb_center;
+
     uint object_id;
     uint left_idx;
     uint right_idx;
+};
+
+struct Sphere {
+    vec3 center;
+    float radius;
 };
 
 #pragma endregion
@@ -15,10 +25,6 @@ struct BVHAABB {
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba8) uniform image2DArray img;
-
-layout(set = 0, binding = 2) uniform readonly ReadonlyConstants {
-    vec3 albedo[4];
-};
 
 layout(set = 0, binding = 1) uniform RenderData {
     // rotation
@@ -35,9 +41,21 @@ layout(set = 0, binding = 1) uniform RenderData {
     float fov;
 } render_conf;
 
+layout(set = 0, binding = 2) uniform readonly ReadonlyConstants {
+    vec3 albedo[4];
+};
+
 layout(set = 0, binding = 3) uniform HotBuffer {
     uint time;
 } hot;
+
+layout(set = 0, binding = 4) buffer BVHAABs {
+    BVHAABB bvh[MAX_OBJECTS];
+} bvh;
+
+layout(set = 0, binding = 5) buffer Objects {
+    Sphere spheres[MAX_OBJECTS];
+} objects;
 
 uint seed = (gl_GlobalInvocationID.x + gl_GlobalInvocationID.y) * gl_GlobalInvocationID.z * hot.time;
 
@@ -116,7 +134,8 @@ RayResult sphere(vec3 center, float radius, vec3 dir, vec3 origin) {
 }
 
 RayResult trace(vec3 dir, vec3 origin) {
-    RayResult ret = sphere(vec3(0., 0., 1), 0.1, dir, origin);
+    Sphere s = objects.spheres[bvh.bvh[0].object_id /* WARNING: MAGICAL - 1 OF THE ID*/];
+    RayResult ret = sphere(s.center, s.radius, dir, origin);
     if (ret.hit)
         return ret;
     else

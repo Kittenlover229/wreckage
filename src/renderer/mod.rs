@@ -2,7 +2,7 @@ use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
 use egui_winit_vulkano::Gui;
 use log::debug;
-use nalgebra_glm::{Mat4, Quat, Vec3};
+use nalgebra_glm::{Mat4, Quat, Vec3, vec3};
 use smallvec::{smallvec, SmallVec};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -32,7 +32,7 @@ use vulkano::{
     VulkanLibrary,
 };
 
-use self::object::MaterialTableBuffer;
+use self::object::{MaterialTableBuffer, SphereBufferData, BVHAABB};
 
 mod object;
 mod shaders;
@@ -46,6 +46,7 @@ pub struct DynamicCameraData {
     pub fov: f32,
     pub near_plane: f32,
     pub far_plane: f32,
+    // TODO: Maybe move out of dynamic data?
     pub samples: u32,
 }
 
@@ -139,6 +140,9 @@ pub struct Renderer {
     pub compute_pipeline: Arc<ComputePipeline>,
     pub readonly_constants: Subbuffer<ReadonlyConstants>,
     pub hotbuffer: Subbuffer<HotBuffer>,
+
+    // Objects
+    pub objects: (Subbuffer<[BVHAABB]>, Subbuffer<[SphereBufferData]>),
 }
 
 impl Renderer {
@@ -248,7 +252,46 @@ impl Renderer {
             HotBuffer { time: 0u32 },
         )?;
 
+        let mut bvhes = [BVHAABB::default(); 4096];
+        let mut spheres = [SphereBufferData::default(); 4096];
+
+        spheres[0].center = vec3(0., 0., 1.).data.0[0];
+        spheres[0].radius = 0.1f32;
+        bvhes[0].aabb_center = spheres[0].center;
+        bvhes[0].aabb_max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
+        bvhes[0].aabb_min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
+        bvhes[0].left_idx = 0;
+        bvhes[0].right_idx = 0;
+        bvhes[0].object_id = 1;
+
+        let bvhes = Buffer::from_iter(
+            &buffer_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            bvhes,
+        )?;
+
+        let spheres = Buffer::from_iter(
+            &buffer_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            spheres,
+        )?;
+
         Ok(Self {
+            objects: (bvhes, spheres),
             hotbuffer,
             cameras: smallvec![],
             swapchains: smallvec![],
@@ -383,6 +426,8 @@ impl Renderer {
                 WriteDescriptorSet::buffer(1, camera.data_buffer.clone()),
                 WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
                 WriteDescriptorSet::buffer(3, self.hotbuffer.clone()),
+                WriteDescriptorSet::buffer(4, self.objects.0.clone()),
+                WriteDescriptorSet::buffer(5, self.objects.1.clone()),
             ],
         )?;
 
@@ -486,6 +531,8 @@ impl Renderer {
                 WriteDescriptorSet::buffer(1, camera_data_buffer.clone()),
                 WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
                 WriteDescriptorSet::buffer(3, self.hotbuffer.clone()),
+                WriteDescriptorSet::buffer(4, self.objects.0.clone()),
+                WriteDescriptorSet::buffer(5, self.objects.1.clone()),
             ],
         )?;
 

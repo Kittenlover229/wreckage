@@ -1,6 +1,5 @@
 use nalgebra_glm::{Quat, Vec3};
 use vulkano::buffer::BufferContents;
-
 #[derive(Debug, Clone)]
 pub struct Material {
     pub albedo: Vec3,
@@ -41,6 +40,19 @@ impl Default for MaterialTableBuffer {
     }
 }
 
+// TODO: Maybe rename this?
+#[derive(Debug, Clone, BufferContents, Default, Copy)]
+#[repr(C)]
+pub struct BVHAABB {
+    pub aabb_min: [f32; 3],
+    pub aabb_max: [f32; 3],
+    pub aabb_center: [f32; 3],
+
+    pub object_id: u32,
+    pub left_idx: u32,
+    pub right_idx: u32,
+}
+
 #[derive(Debug, Clone)]
 pub enum RenderableObjectKind {
     Sphere { radius: f32 },
@@ -51,4 +63,11 @@ pub struct RenderableObject {
     pub kind: RenderableObjectKind,
     pub pos: Vec3,
     pub rotation: Quat,
+}
+
+#[derive(Debug, Clone, BufferContents, Default, Copy)]
+#[repr(C)]
+pub struct SphereBufferData {
+    pub center: [f32; 3],
+    pub radius: f32,
 }
