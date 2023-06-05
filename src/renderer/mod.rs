@@ -1,8 +1,4 @@
-use std::{
-    borrow::Borrow,
-    cell::{RefCell, RefMut},
-    sync::Arc,
-};
+use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
 use egui_winit_vulkano::Gui;
 use log::debug;
@@ -12,8 +8,7 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BlitImageInfo,
-        CommandBufferUsage, CopyImageToBufferInfo,
-        PrimaryAutoCommandBuffer,
+        CommandBufferUsage, CopyImageToBufferInfo, PrimaryAutoCommandBuffer,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
@@ -27,9 +22,7 @@ use vulkano::{
         view::ImageView, ImageAccess, ImageCreateFlags, ImageUsage, StorageImage, SwapchainImage,
     },
     instance::{Instance, InstanceCreateInfo},
-    memory::allocator::{
-        AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator,
-    },
+    memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator},
     pipeline::{ComputePipeline, Pipeline},
     swapchain::{
         self, AcquireError, PresentMode, Surface, Swapchain, SwapchainCreateInfo,
@@ -99,7 +92,7 @@ pub struct SwapchainPresenter {
     pub idx: u32,
 
     pub swapchain: Arc<Swapchain>,
-    pub images: Vec<Arc<SwapchainImage>>,
+    pub images: SmallVec<[Arc<SwapchainImage>; 16]>,
     pub blit_command_buffers: SmallVec<[Arc<PrimaryAutoCommandBuffer>; 4]>,
 }
 
@@ -128,8 +121,8 @@ pub struct ReadonlyConstants {
 }
 
 pub struct Renderer {
-    pub cameras: Vec<Arc<RefCell<Camera>>>,
-    pub swapchains: Vec<SwapchainPresenter>,
+    pub cameras: SmallVec<[Arc<RefCell<Camera>>; 8]>,
+    pub swapchains: SmallVec<[SwapchainPresenter; 1]>,
 
     // Allocators
     pub buffer_allocator: StandardMemoryAllocator,
@@ -257,8 +250,8 @@ impl Renderer {
 
         Ok(Self {
             hotbuffer,
-            cameras: vec![],
-            swapchains: vec![],
+            cameras: smallvec![],
+            swapchains: smallvec![],
             instance,
             device,
             fallback_queue: queue,
@@ -326,7 +319,7 @@ impl Renderer {
             dirty: false,
             idx: self.swapchains.len() as u32,
             swapchain,
-            images,
+            images: SmallVec::from_vec(images),
             camera_idx,
             blit_command_buffers,
         };
@@ -428,7 +421,7 @@ impl Renderer {
         s.blit_command_buffers = blit_command_buffers;
         s.dirty = false;
         s.swapchain = swapchain;
-        s.images = images;
+        s.images = SmallVec::from_vec(images);
 
         Ok(())
     }
