@@ -323,6 +323,14 @@ impl Renderer {
             .physical
             .surface_capabilities(&surface, Default::default())?;
 
+        let present_mode = self.physical.surface_present_modes(&surface).map(|mut x| {
+            if x.any(|p| p == PresentMode::Immediate) {
+                PresentMode::Immediate
+            } else {
+                PresentMode::Fifo /* exists on all devices */
+            }
+        })?;
+
         let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
         let image_format = self
             .physical
@@ -338,8 +346,7 @@ impl Renderer {
                 image_format: Some(image_format),
                 image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                 composite_alpha,
-                // TODO: check if present mode is supported
-                present_mode: PresentMode::Immediate,
+                present_mode,
                 ..Default::default()
             },
         )?;
