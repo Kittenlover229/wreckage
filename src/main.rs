@@ -124,7 +124,6 @@ pub fn main() -> anyhow::Result<()> {
             far_plane: 4f32,
             pos: Vec3::zeros(),
             rotation: quat_look_at_lh(&Vec3::new(0., 0., 1.), &Vec3::new(0., 1., 0.)),
-            samples: 4,
         },
         4,
         size.width,

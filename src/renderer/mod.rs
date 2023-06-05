@@ -46,8 +46,6 @@ pub struct DynamicCameraData {
     pub fov: f32,
     pub near_plane: f32,
     pub far_plane: f32,
-    // TODO: Maybe move out of dynamic data?
-    pub samples: u32,
 }
 
 impl DynamicCameraData {
@@ -61,6 +59,7 @@ pub struct Camera {
     pub idx: u32,
     pub width: u32,
     pub height: u32,
+    pub samples: u32,
 
     pub dynamic_data: RefCell<DynamicCameraData>,
 
@@ -391,7 +390,7 @@ impl Renderer {
         };
 
         let mut camera = self.cameras[s.camera_idx as usize].as_ref().borrow_mut();
-        let samples = camera.dynamic_data.borrow().samples.to_owned();
+        let samples = camera.samples.to_owned();
 
         let mut cmd_builder = AutoCommandBufferBuilder::primary(
             &self.command_allocator,
@@ -449,7 +448,7 @@ impl Renderer {
             .dispatch([
                 camera.width / camera.downscale_factor,
                 camera.height / camera.downscale_factor,
-                camera.dynamic_data.borrow().samples,
+                camera.samples,
             ])?;
         camera.render_command_buffer = Arc::new(cmd_builder.build()?);
         camera.refresh_data_buffer()?;
@@ -486,12 +485,13 @@ impl Renderer {
         height: u32,
     ) -> anyhow::Result<Arc<RefCell<Camera>>> {
         let dynamic_data = dynamic_data.borrow();
+        let samples = 4;
         let out_buffer = StorageImage::with_usage(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
                 width: width / downscale_factor,
                 height: height / downscale_factor,
-                array_layers: dynamic_data.samples,
+                array_layers: samples,
             },
             Renderer::camera_format(),
             ImageUsage::TRANSFER_SRC
@@ -558,11 +558,7 @@ impl Renderer {
                 descriptor_set.clone(),
             )
             .bind_pipeline_compute(self.compute_pipeline.clone())
-            .dispatch([
-                width / downscale_factor,
-                height / downscale_factor,
-                dynamic_data.borrow().samples,
-            ])?;
+            .dispatch([width / downscale_factor, height / downscale_factor, samples])?;
 
         let camera = Arc::new(RefCell::new(Camera {
             width,
@@ -574,6 +570,7 @@ impl Renderer {
             downscale_factor,
             data_buffer: camera_data_buffer,
             render_command_buffer: Arc::new(cmd_builder.build()?),
+            samples,
         }));
 
         self.cameras.push(camera.clone());
@@ -694,7 +691,7 @@ impl Renderer {
                 usage: MemoryUsage::Download,
                 ..Default::default()
             },
-            (0..camera.pixel_area() * 4 * camera.dynamic_data.borrow().samples).map(|_| 0u8),
+            (0..camera.pixel_area() * 4 * camera.samples).map(|_| 0u8),
         )?;
 
         let mut builder = AutoCommandBufferBuilder::primary(
