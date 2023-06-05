@@ -19,7 +19,9 @@ use vulkano::{
         Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
     },
     format::Format,
-    image::{view::ImageView, ImageAccess, ImageUsage, StorageImage, SwapchainImage},
+    image::{
+        view::ImageView, ImageAccess, ImageCreateFlags, ImageUsage, StorageImage, SwapchainImage,
+    },
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{
         AllocationCreateInfo, MemoryAllocator, MemoryUsage, StandardMemoryAllocator,
@@ -223,7 +225,7 @@ impl Renderer {
         let readonly_constants = Buffer::from_data(
             &buffer_allocator,
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
@@ -238,7 +240,7 @@ impl Renderer {
         let hotbuffer = Buffer::from_data(
             &buffer_allocator,
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
@@ -287,7 +289,7 @@ impl Renderer {
                 image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
                 composite_alpha,
                 // TODO: check if present mode is supported
-                present_mode: PresentMode::Fifo,
+                present_mode: PresentMode::Immediate,
                 ..Default::default()
             },
         )
@@ -328,7 +330,8 @@ impl Renderer {
 
         camera.width = dimensions[0];
         camera.height = dimensions[1];
-        camera.out_buffer = StorageImage::new(
+
+        camera.out_buffer = StorageImage::with_usage(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
                 width: camera.width / camera.downscale_factor,
@@ -336,7 +339,12 @@ impl Renderer {
                 array_layers: samples,
             },
             Renderer::camera_format(),
-            Some(self.fallback_queue.queue_family_index()),
+            ImageUsage::TRANSFER_SRC
+                | ImageUsage::COLOR_ATTACHMENT
+                | ImageUsage::SAMPLED
+                | ImageUsage::STORAGE,
+            ImageCreateFlags::MUTABLE_FORMAT,
+            [self.fallback_queue.queue_family_index()],
         )?;
 
         let pipeline_layout = self.compute_pipeline.layout();
@@ -388,7 +396,8 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> anyhow::Result<Arc<RefCell<Camera>>> {
-        let out_buffer = StorageImage::new(
+        let dynamic_data = dynamic_data.borrow();
+        let out_buffer = StorageImage::with_usage(
             &self.buffer_allocator,
             vulkano::image::ImageDimensions::Dim2d {
                 width: width / downscale_factor,
@@ -396,15 +405,18 @@ impl Renderer {
                 array_layers: dynamic_data.samples,
             },
             Renderer::camera_format(),
-            Some(self.fallback_queue.queue_family_index()),
+            ImageUsage::TRANSFER_SRC
+                | ImageUsage::COLOR_ATTACHMENT
+                | ImageUsage::SAMPLED
+                | ImageUsage::STORAGE,
+            ImageCreateFlags::MUTABLE_FORMAT,
+            [self.fallback_queue.queue_family_index()],
         )?;
-
-        let dynamic_data = dynamic_data.borrow();
 
         let camera_data_buffer = Buffer::from_data(
             &self.buffer_allocator,
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
