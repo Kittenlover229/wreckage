@@ -32,7 +32,7 @@ use vulkano::{
     VulkanLibrary,
 };
 
-use self::object::{MaterialTableBuffer, SphereBufferData, BVHAABB};
+use self::object::{BoundingVolumeHierarchy, MaterialTableBuffer, SphereBufferData, BVHAABB};
 
 mod object;
 mod shaders;
@@ -141,7 +141,8 @@ pub struct Renderer {
     pub hotbuffer: Subbuffer<HotBuffer>,
 
     // Objects
-    pub objects: (Subbuffer<[BVHAABB]>, Subbuffer<[SphereBufferData]>),
+    pub bvh: Subbuffer<BoundingVolumeHierarchy>,
+    pub spheres: Subbuffer<[SphereBufferData]>,
 }
 
 impl Renderer {
@@ -251,7 +252,6 @@ impl Renderer {
             HotBuffer { time: 0u32 },
         )?;
 
-        let bvhes = (0..4096).map(|_| Default::default());
         let spheres = (0..4096).map(|_| Default::default());
 
         let spheres: Subbuffer<[SphereBufferData]> = Buffer::from_iter(
@@ -273,7 +273,7 @@ impl Renderer {
             spheres[0].radius = 0.1f32;
         }
 
-        let bvhes: Subbuffer<[BVHAABB]> = Buffer::from_iter(
+        let bvh: Subbuffer<BoundingVolumeHierarchy> = Buffer::new_sized(
             &buffer_allocator,
             BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER,
@@ -283,11 +283,15 @@ impl Renderer {
                 usage: MemoryUsage::Upload,
                 ..Default::default()
             },
-            bvhes,
         )?;
 
         {
-            let mut bvhes = bvhes.write()?;
+            let mut bvhes = bvh.write()?;
+            bvhes.len = 1;
+            bvhes.min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
+            bvhes.max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
+
+            let mut bvhes = &mut bvhes.volumes;
             bvhes[0].aabb_center = vec3(0., 0., 1.).data.0[0];
             bvhes[0].aabb_max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
             bvhes[0].aabb_min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
@@ -297,7 +301,8 @@ impl Renderer {
         }
 
         Ok(Self {
-            objects: (bvhes, spheres),
+            bvh,
+            spheres,
             hotbuffer,
             cameras: smallvec![],
             swapchains: smallvec![],
@@ -439,8 +444,8 @@ impl Renderer {
                 WriteDescriptorSet::buffer(1, camera.data_buffer.clone()),
                 WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
                 WriteDescriptorSet::buffer(3, self.hotbuffer.clone()),
-                WriteDescriptorSet::buffer(4, self.objects.0.clone()),
-                WriteDescriptorSet::buffer(5, self.objects.1.clone()),
+                WriteDescriptorSet::buffer(4, self.bvh.clone()),
+                WriteDescriptorSet::buffer(5, self.spheres.clone()),
             ],
         )?;
 
@@ -545,8 +550,8 @@ impl Renderer {
                 WriteDescriptorSet::buffer(1, camera_data_buffer.clone()),
                 WriteDescriptorSet::buffer(2, self.readonly_constants.clone()),
                 WriteDescriptorSet::buffer(3, self.hotbuffer.clone()),
-                WriteDescriptorSet::buffer(4, self.objects.0.clone()),
-                WriteDescriptorSet::buffer(5, self.objects.1.clone()),
+                WriteDescriptorSet::buffer(4, self.bvh.clone()),
+                WriteDescriptorSet::buffer(5, self.spheres.clone()),
             ],
         )?;
 

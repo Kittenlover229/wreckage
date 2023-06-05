@@ -53,6 +53,16 @@ pub struct BVHAABB {
     pub right_idx: u32,
 }
 
+#[derive(Debug, Clone, BufferContents)]
+#[repr(C)]
+pub struct BoundingVolumeHierarchy {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    pub len: u32,
+
+    pub volumes: [BVHAABB; 4096],
+}
+
 #[derive(Debug, Clone)]
 pub enum RenderableObjectKind {
     Sphere { radius: f32 },

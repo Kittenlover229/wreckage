@@ -50,6 +50,10 @@ layout(set = 0, binding = 3) uniform HotBuffer {
 } hot;
 
 layout(set = 0, binding = 4) buffer BVHAABs {
+    vec3 aabb_min;
+    vec3 aabb_max;
+    uint len;
+
     BVHAABB bvh[MAX_OBJECTS];
 } bvh;
 
