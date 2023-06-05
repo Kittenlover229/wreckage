@@ -2,7 +2,7 @@ use std::{borrow::Borrow, cell::RefCell, sync::Arc};
 
 use egui_winit_vulkano::Gui;
 use log::debug;
-use nalgebra_glm::{Mat4, Quat, Vec3, vec3};
+use nalgebra_glm::{vec3, Mat4, Quat, Vec3};
 use smallvec::{smallvec, SmallVec};
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -252,19 +252,29 @@ impl Renderer {
             HotBuffer { time: 0u32 },
         )?;
 
-        let mut bvhes = [BVHAABB::default(); 4096];
-        let mut spheres = [SphereBufferData::default(); 4096];
+        let bvhes = (0..4096).map(|_| Default::default());
+        let spheres = (0..4096).map(|_| Default::default());
 
-        spheres[0].center = vec3(0., 0., 1.).data.0[0];
-        spheres[0].radius = 0.1f32;
-        bvhes[0].aabb_center = spheres[0].center;
-        bvhes[0].aabb_max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
-        bvhes[0].aabb_min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
-        bvhes[0].left_idx = 0;
-        bvhes[0].right_idx = 0;
-        bvhes[0].object_id = 1;
+        let spheres: Subbuffer<[SphereBufferData]> = Buffer::from_iter(
+            &buffer_allocator,
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                usage: MemoryUsage::Upload,
+                ..Default::default()
+            },
+            spheres,
+        )?;
 
-        let bvhes = Buffer::from_iter(
+        {
+            let mut spheres = spheres.write()?;
+            spheres[0].center = vec3(0., 0., 1.).data.0[0];
+            spheres[0].radius = 0.1f32;
+        }
+
+        let bvhes: Subbuffer<[BVHAABB]> = Buffer::from_iter(
             &buffer_allocator,
             BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER,
@@ -277,18 +287,15 @@ impl Renderer {
             bvhes,
         )?;
 
-        let spheres = Buffer::from_iter(
-            &buffer_allocator,
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                usage: MemoryUsage::Upload,
-                ..Default::default()
-            },
-            spheres,
-        )?;
+        {
+            let mut bvhes = bvhes.write()?;
+            bvhes[0].aabb_center = vec3(0., 0., 1.).data.0[0];
+            bvhes[0].aabb_max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
+            bvhes[0].aabb_min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
+            bvhes[0].left_idx = 0;
+            bvhes[0].right_idx = 0;
+            bvhes[0].object_id = 1;
+        }
 
         Ok(Self {
             objects: (bvhes, spheres),
