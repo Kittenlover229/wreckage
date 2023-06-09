@@ -1,3 +1,6 @@
+/* This shader does all the heavy lifting by combining the generation, 
+intersection, miss and closest-hit shaders */
+
 #version 460
 
 #define MAX_OBJECTS 4096
@@ -9,6 +12,7 @@ struct BVHAABB {
     vec3 aabb_min;
     vec3 aabb_max;
     vec3 aabb_center;
+    uint morton;
 
     uint object_id;
     uint left_idx;
@@ -163,7 +167,6 @@ void main() {
     imageStore(img, ivec3(gl_GlobalInvocationID.xyz), vec4(hit.colour, hit.depth));
 
     // do AA merging
-    barrier();
     if (gl_GlobalInvocationID.z == 0) {
         vec4 colour = vec4(0);
         for (uint i = 0; i < gl_NumWorkGroups.z; i++)

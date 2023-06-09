@@ -47,6 +47,7 @@ pub struct BVHAABB {
     pub aabb_min: [f32; 3],
     pub aabb_max: [f32; 3],
     pub aabb_center: [f32; 3],
+    pub morton: u32,
 
     pub object_id: u32,
     pub left_idx: u32,

@@ -1,0 +1,64 @@
+/* This shader is supposed to be run whenever the BVH is mutated and is
+responsible for sorting it into an optimal order */
+
+#version 460
+
+#define MAX_OBJECTS 4096
+
+struct BVHAABB {
+    vec3 aabb_min;
+    vec3 aabb_max;
+    vec3 aabb_center;
+    uint morton;
+
+    uint object_id;
+    uint left_idx;
+    uint right_idx;
+};
+
+layout(set = 0, binding = 4) buffer BVHAABs {
+    vec3 aabb_min;
+    vec3 aabb_max;
+    uint len;
+
+    BVHAABB bvh[MAX_OBJECTS];
+} bvh;
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define BVH_IDX gl_LocalInvocationIndex
+
+
+uint morton(uint v) {
+    v = (v * 0x00010001u) & 0xFF0000FFu;
+    v = (v * 0x00000101u) & 0x0F00F00Fu;
+    v = (v * 0x00000011u) & 0xC30C30C3u;
+    v = (v * 0x00000005u) & 0x49249249u;
+    return v;
+}
+
+
+void morton_encode() {
+    BVHAABB volume = bvh.bvh[BVH_IDX];
+    vec3 center = volume.aabb_center;
+
+    float x = min(max(center.x * 1024., 0.0), 1023.0);
+    float y = min(max(center.y * 1024., 0.0), 1023.0);
+    float z = min(max(center.z * 1024., 0.0), 1023.0);
+    uint xx = morton(uint(x));
+    uint yy = morton(uint(y));
+    uint zz = morton(uint(z));
+    volume.morton = xx * 4 + yy * 2 + zz;
+}
+
+
+void sort() {
+
+}
+
+
+void main() {
+    morton_encode();
+    barrier();
+    sort();
+}
