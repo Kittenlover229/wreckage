@@ -1,4 +1,4 @@
-use nalgebra_glm::{Quat, Vec3};
+use nalgebra_glm::{vec3, Quat, Vec3};
 use vulkano::buffer::BufferContents;
 #[derive(Debug, Clone)]
 pub struct Material {
@@ -74,6 +74,58 @@ pub struct RenderableObject {
     pub kind: RenderableObjectKind,
     pub pos: Vec3,
     pub rotation: Quat,
+}
+
+impl RenderableObject {
+    pub fn into_buffer(self, object_id: u32) -> (SphereBufferData, BVHAABB) {
+        let sphere = SphereBufferData {
+            center: self.pos.data.0[0],
+            radius: match self.kind {
+                RenderableObjectKind::Sphere { radius } => radius,
+                _ => unimplemented!(),
+            },
+        };
+
+        let radius = sphere.radius;
+
+        let bvh = BVHAABB {
+            aabb_min: (self.pos - vec3(radius, radius, radius) / 2.).data.0[0],
+            aabb_max: (self.pos + vec3(radius, radius, radius) / 2.).data.0[0],
+            aabb_center: sphere.center,
+            morton: 0b0,
+            object_id,
+            left_idx: 0,
+            right_idx: 0,
+        };
+        (sphere, bvh)
+    }
+}
+
+// TESTING GARBAGE
+pub fn generate_object_grid(side: usize) -> (Vec3, Vec<(SphereBufferData, BVHAABB)>, Vec3) {
+    let mut out = vec![];
+
+    for i in 0..side {
+        for j in 0..side {
+            for k in 0..side {
+                let obj = RenderableObject {
+                    kind: RenderableObjectKind::Sphere {
+                        radius: ((i * j ^ k) % 5 + 1) as f32 / 10.,
+                    },
+                    pos: vec3(i as f32, j as f32, k as f32),
+                    rotation: Quat::identity(),
+                };
+
+                out.push(obj.into_buffer((i * side * side + j * side + k) as u32));
+            }
+        }
+    }
+
+    (
+        -Vec3::new(1., 1., 1.),
+        out,
+        Vec3::new(1., 1., 1.) * (side as f32 + 1f32),
+    )
 }
 
 #[derive(Debug, Clone, BufferContents, Default, Copy)]

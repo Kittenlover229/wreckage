@@ -32,6 +32,8 @@ use vulkano::{
     VulkanLibrary,
 };
 
+use crate::renderer::object::generate_object_grid;
+
 use self::object::{BoundingVolumeHierarchy, MaterialTableBuffer, SphereBufferData, BVHAABB};
 
 mod object;
@@ -264,12 +266,6 @@ impl Renderer {
             spheres,
         )?;
 
-        {
-            let mut spheres = spheres.write()?;
-            spheres[0].center = vec3(0., 0., 1.).data.0[0];
-            spheres[0].radius = 0.1f32;
-        }
-
         let bvh: Subbuffer<BoundingVolumeHierarchy> = Buffer::new_sized(
             &buffer_allocator,
             BufferCreateInfo {
@@ -282,19 +278,19 @@ impl Renderer {
             },
         )?;
 
+        let (min, objects, max) = generate_object_grid(2);
+
         {
             let mut bvhes = bvh.write()?;
-            bvhes.len = 1;
-            bvhes.min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
-            bvhes.max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
+            let mut spheres = spheres.write()?;
+            bvhes.len = objects.len() as u32;
+            bvhes.min = min.data.0[0];
+            bvhes.max = max.data.0[0];
 
-            let bvhes = &mut bvhes.volumes;
-            bvhes[0].aabb_center = vec3(0., 0., 1.).data.0[0];
-            bvhes[0].aabb_max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
-            bvhes[0].aabb_min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
-            bvhes[0].left_idx = 0;
-            bvhes[0].right_idx = 0;
-            bvhes[0].object_id = 1;
+            for (i, (sphere, bvh)) in objects.iter().enumerate() {
+                bvhes.volumes[i] = bvh.to_owned();
+                spheres[bvhes.volumes[i].object_id as usize] = sphere.to_owned();
+            }
         }
 
         Ok(Self {

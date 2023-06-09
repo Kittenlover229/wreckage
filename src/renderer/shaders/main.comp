@@ -142,8 +142,9 @@ RayResult sphere(vec3 center, float radius, vec3 dir, vec3 origin) {
 }
 
 RayResult trace(vec3 dir, vec3 origin) {
-    Sphere s = objects.spheres[bvh.bvh[0].object_id /* WARNING: MAGICAL - 1 OF THE ID*/];
-    RayResult ret = sphere(s.center + vec3(cos(5 * hot.time), sin(5 * hot.time), 0), s.radius, dir, origin);
+    Sphere _ = objects.spheres[bvh.bvh[0].object_id /* WARNING: MAGICAL - 1 OF THE ID*/];
+    Sphere s = objects.spheres[2];
+    RayResult ret = sphere(s.center + vec3(0, sin(hot.time) / 2, 0), s.radius, dir, origin);
     if (ret.hit)
         return ret;
     else

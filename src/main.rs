@@ -5,7 +5,7 @@ use egui_winit_vulkano::{
     egui::{epaint::Shadow, Visuals},
     Gui, GuiConfig,
 };
-use nalgebra_glm::{pi, quat_angle_axis, quat_look_at_lh, Vec3};
+use nalgebra_glm::{pi, quat_angle_axis, quat_look_at_lh, Vec3, vec3};
 pub use renderer::*;
 use vulkano::VulkanLibrary;
 use vulkano_win::create_surface_from_winit;
@@ -122,7 +122,7 @@ pub fn main() -> anyhow::Result<()> {
             fov: 90f32,
             near_plane: 0.1f32,
             far_plane: 4f32,
-            pos: Vec3::zeros(),
+            pos: vec3(-1., 0., -1.),
             rotation: quat_look_at_lh(&Vec3::new(0., 0., 1.), &Vec3::new(0., 1., 0.)),
         },
         4,
