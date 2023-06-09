@@ -46,7 +46,7 @@ layout(set = 0, binding = 2) uniform readonly ReadonlyConstants {
 };
 
 layout(set = 0, binding = 3) uniform HotBuffer {
-    uint time;
+    float time;
 } hot;
 
 layout(set = 0, binding = 4) buffer BVHAABs {
@@ -61,7 +61,7 @@ layout(set = 0, binding = 5) buffer Objects {
     Sphere spheres[MAX_OBJECTS];
 } objects;
 
-uint seed = (gl_GlobalInvocationID.x + gl_GlobalInvocationID.y) * gl_GlobalInvocationID.z * hot.time;
+uint seed = (gl_GlobalInvocationID.x + gl_GlobalInvocationID.y) * gl_GlobalInvocationID.z;
 
 // Bob Jenkins's One-At-A-Time
 uint stable_random() {
@@ -139,7 +139,7 @@ RayResult sphere(vec3 center, float radius, vec3 dir, vec3 origin) {
 
 RayResult trace(vec3 dir, vec3 origin) {
     Sphere s = objects.spheres[bvh.bvh[0].object_id /* WARNING: MAGICAL - 1 OF THE ID*/];
-    RayResult ret = sphere(s.center, s.radius, dir, origin);
+    RayResult ret = sphere(s.center + vec3(cos(5 * hot.time), sin(5 * hot.time), 0), s.radius, dir, origin);
     if (ret.hit)
         return ret;
     else

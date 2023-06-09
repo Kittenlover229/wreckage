@@ -111,7 +111,7 @@ pub struct CameraDataBuffer {
 #[derive(BufferContents, Debug)]
 #[repr(C)]
 pub struct HotBuffer {
-    time: u32,
+    time: f32,
 }
 
 #[derive(BufferContents)]
@@ -134,6 +134,7 @@ pub struct Renderer {
     pub device: Arc<Device>,
     pub physical: Arc<PhysicalDevice>,
     pub fallback_queue: Arc<Queue>,
+    pub init_time: std::time::SystemTime,
 
     // Rendering
     pub compute_pipeline: Arc<ComputePipeline>,
@@ -173,10 +174,6 @@ impl Renderer {
                 PhysicalDeviceType::IntegratedGpu => 1,
                 PhysicalDeviceType::VirtualGpu => 2,
                 PhysicalDeviceType::Cpu => 3,
-
-                // Note that there exists `PhysicalDeviceType::Other`, however,
-                // `PhysicalDeviceType` is a non-exhaustive enum. Thus, one should
-                // match wildcard `_` to catch all unknown device types.
                 _ => 4,
             })
             .unwrap();
@@ -249,7 +246,7 @@ impl Renderer {
                 usage: MemoryUsage::Upload,
                 ..Default::default()
             },
-            HotBuffer { time: 0u32 },
+            HotBuffer { time: 0. },
         )?;
 
         let spheres = (0..4096).map(|_| Default::default());
@@ -291,7 +288,7 @@ impl Renderer {
             bvhes.min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
             bvhes.max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
 
-            let mut bvhes = &mut bvhes.volumes;
+            let bvhes = &mut bvhes.volumes;
             bvhes[0].aabb_center = vec3(0., 0., 1.).data.0[0];
             bvhes[0].aabb_max = (vec3(0., 0., 1.) + vec3(0.1, 0.1, 0.1)).data.0[0];
             bvhes[0].aabb_min = (vec3(0., 0., 1.) - vec3(0.1, 0.1, 0.1)).data.0[0];
@@ -301,6 +298,7 @@ impl Renderer {
         }
 
         Ok(Self {
+            init_time: std::time::SystemTime::now(),
             bvh,
             spheres,
             hotbuffer,
@@ -594,8 +592,8 @@ impl Renderer {
         {
             let mut hotbuffer = self.hotbuffer.write()?;
             hotbuffer.time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .subsec_micros();
+                .duration_since(self.init_time)?
+                .as_secs_f32();
         }
 
         for camera in &self.cameras {
