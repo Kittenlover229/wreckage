@@ -343,7 +343,8 @@ impl Renderer {
             SwapchainCreateInfo {
                 min_image_count: caps.min_image_count + 1,
                 image_format: Some(image_format),
-                image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+                image_usage: ImageUsage::TRANSFER_DST | ImageUsage::COLOR_ATTACHMENT | ImageUsage::INPUT_ATTACHMENT,
+                image_extent: caps.min_image_extent,
                 composite_alpha,
                 present_mode,
                 ..Default::default()
